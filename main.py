@@ -1,5 +1,6 @@
 import geopandas as gpd
 import pandas as pd
+from src.data.prepare_data import main as preprocessing_pipeline
 
 def analyze_hazard_data(shapefile_path, hazard_type):
     print("=" * 60)
@@ -56,12 +57,15 @@ def analyze_hazard_data(shapefile_path, hazard_type):
 
 
 if __name__ == "__main__":
-    analyze_hazard_data(
-        "./benguet-flood/Benguet_Flood_25year.shp",
-        hazard_type="flood"
-    )
+    # analyze_hazard_data(
+    #     "./benguet-flood/Benguet_Flood_25year.shp",
+    #     hazard_type="flood"
+    # )
 
-    analyze_hazard_data(
-        "./benguet-landslide/Benguet_LandslideHazards.shp",
-        hazard_type="landslide"
-    )
+    # analyze_hazard_data(
+    #     "./benguet-landslide/Benguet_LandslideHazards.shp",
+    #     hazard_type="landslide"
+    # )
+    preprocessing_pipeline()
+
+    
