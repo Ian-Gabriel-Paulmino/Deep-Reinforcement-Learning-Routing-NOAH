@@ -1,0 +1,20 @@
+{
+  "activation_mode": "deterministic_v3",
+  "cohort_id": "la_trinidad_mini",
+  "feasibility_filtered": true,
+  "generated_at": "2026-04-18T17:08:25+08:00",
+  "graph_id": "la_trinidad_subgraph_n200",
+  "graph_path": "data/staged_subgraphs/selected_subgraph_n200.graphml",
+  "master_seed": 42,
+  "num_deliveries": 5,
+  "num_scenarios": 100,
+  "ri_distribution": {
+    "RI1": 20,
+    "RI2": 20,
+    "RI3": 20,
+    "RI4": 20,
+    "RI5": 20
+  },
+  "sampling_policy": "stratified_by_RI",
+  "scenarios_path": "scenarios.jsonl"
+}
