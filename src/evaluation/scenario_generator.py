@@ -114,6 +114,27 @@ def load_rain_levels_from_config(config_path: Path) -> dict[str, dict[str, float
     return rain
 
 
+def load_time_weights_from_config(
+    config_path: Path,
+) -> tuple[Optional[float], Optional[float]]:
+    """Extract ``hazard.flood_time_weight`` / ``hazard.landslide_time_weight``.
+
+    These are the travel-time-drag weights (α_f, α_l from manuscript §B).
+    Returns ``(None, None)`` when the keys are absent so the caller can fall
+    back to module defaults. Distinct from ``reward.w_flood`` /
+    ``reward.w_landslide`` (which are training reward weights, §D).
+    """
+    with config_path.open("r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    hazard = cfg.get("hazard", {})
+    af = hazard.get("flood_time_weight")
+    al = hazard.get("landslide_time_weight")
+    return (
+        float(af) if af is not None else None,
+        float(al) if al is not None else None,
+    )
+
+
 def compute_blocked_edges(
     G: nx.DiGraph,
     rain_cfg: dict[str, float],
@@ -177,16 +198,17 @@ def build_passable_graph(G: nx.DiGraph, blocked: set[tuple[str, str]]) -> nx.DiG
 def compute_travel_time_map(
     G: nx.DiGraph,
     rain_cfg: dict[str, float],
-    w_flood: float,
-    w_landslide: float,
+    alpha_flood: float,
+    alpha_landslide: float,
 ) -> dict[str, float]:
-    """Per-edge effective travel time in minutes (§3.1.3 eq).
+    """Per-edge effective travel time in minutes (manuscript §B).
 
     T_e = L_e / (v_e * mu(RI)) * lambda_hazard(H_f, H_l)
-        = base_time / speed_mult * (1 + w_f * H_f + w_l * H_l)
+        = base_time / speed_mult * (1 + alpha_f * H_f + alpha_l * H_l)
 
-    Blocked edges are not included in the map (they should never be
-    traversed; if a policy asks for one the evaluator will flag it).
+    alpha_flood / alpha_landslide are the travel-time-drag weights from
+    manuscript §B. They are distinct from the reward-penalty weights
+    w_f, w_l in §D — do not conflate them.
     """
     speed_mult = max(float(rain_cfg["speed_mult"]), 1e-6)
     inv_mu = 1.0 / speed_mult
@@ -195,7 +217,7 @@ def compute_travel_time_map(
         hf = float(data.get("flood_hazard", 0.0))
         hl = float(data.get("landslide_hazard", 0.0))
         base = float(data.get("base_time", 0.0))
-        lam = 1.0 + w_flood * hf + w_landslide * hl
+        lam = 1.0 + alpha_flood * hf + alpha_landslide * hl
         tmap[edge_key(u, v)] = base * inv_mu * lam
     return tmap
 
@@ -225,8 +247,11 @@ def is_feasible(G_pass: nx.DiGraph, start: str, deliveries: list[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-DEFAULT_W_FLOOD = 0.6
-DEFAULT_W_LANDSLIDE = 0.4
+# Travel-time drag weights (α_f, α_l from manuscript §B: λ = 1 + α_f·H_f + α_l·H_l).
+# Empirically calibrated — NOT the same as reward-penalty weights (w_f, w_l).
+# See README §6 for the α-vs-w distinction.
+DEFAULT_ALPHA_FLOOD = 0.5
+DEFAULT_ALPHA_LANDSLIDE = 0.5
 
 
 def generate_cohort(
@@ -243,12 +268,34 @@ def generate_cohort(
     max_steps: int = 220,
     ri_keys: Optional[list[str]] = None,
     max_sample_attempts: int = 200,
-    w_flood: float = DEFAULT_W_FLOOD,
-    w_landslide: float = DEFAULT_W_LANDSLIDE,
+    alpha_flood: Optional[float] = None,
+    alpha_landslide: Optional[float] = None,
 ) -> tuple[Cohort, list[Scenario]]:
     G = load_graph(graph_path)
     rain_levels = load_rain_levels_from_config(config_path)
     ri_keys = ri_keys or sorted(rain_levels.keys())
+
+    # Resolve travel-time drag weights (α_f, α_l from manuscript §B).
+    # Priority: explicit CLI/kwarg override > config > module default.
+    cfg_af, cfg_al = load_time_weights_from_config(config_path)
+    resolved_af = alpha_flood if alpha_flood is not None else (
+        cfg_af if cfg_af is not None else DEFAULT_ALPHA_FLOOD
+    )
+    resolved_al = alpha_landslide if alpha_landslide is not None else (
+        cfg_al if cfg_al is not None else DEFAULT_ALPHA_LANDSLIDE
+    )
+    af_source = (
+        "override" if alpha_flood is not None
+        else ("config" if cfg_af is not None else "default")
+    )
+    al_source = (
+        "override" if alpha_landslide is not None
+        else ("config" if cfg_al is not None else "default")
+    )
+    logger.info(
+        f"  travel-time weights: alpha_flood={resolved_af} ({af_source}), "
+        f"alpha_landslide={resolved_al} ({al_source})"
+    )
 
     if num_scenarios % len(ri_keys) != 0:
         logger.warning(
@@ -272,7 +319,7 @@ def generate_cohort(
         passable = build_passable_graph(G, blocked)
         sccs = sorted(nx.strongly_connected_components(passable), key=len, reverse=True)
         largest_scc = sccs[0] if sccs else set()
-        tmap = compute_travel_time_map(G, rain_cfg, w_flood, w_landslide)
+        tmap = compute_travel_time_map(G, rain_cfg, resolved_af, resolved_al)
         ri_state[ri] = {
             "rain_cfg": rain_cfg,
             "activation_seed": activation_seed,
@@ -387,8 +434,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--activation-mode", default="deterministic_v3")
     p.add_argument("--max-steps", type=int, default=220)
     p.add_argument("--ri-keys", nargs="*", default=None)
-    p.add_argument("--w-flood", type=float, default=DEFAULT_W_FLOOD)
-    p.add_argument("--w-landslide", type=float, default=DEFAULT_W_LANDSLIDE)
+    # Travel-time drag weights (α_f, α_l from manuscript §B). When omitted,
+    # the generator reads `hazard.flood_time_weight` / `landslide_time_weight`
+    # from the config JSON, falling back to the module defaults (0.5 / 0.5).
+    p.add_argument("--alpha-flood", type=float, default=None,
+                   help="Override hazard.flood_time_weight from config")
+    p.add_argument("--alpha-landslide", type=float, default=None,
+                   help="Override hazard.landslide_time_weight from config")
     p.add_argument("--debug", action="store_true")
     args = p.parse_args(argv)
 
@@ -415,8 +467,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         activation_mode=args.activation_mode,
         max_steps=args.max_steps,
         ri_keys=args.ri_keys,
-        w_flood=args.w_flood,
-        w_landslide=args.w_landslide,
+        alpha_flood=args.alpha_flood,
+        alpha_landslide=args.alpha_landslide,
     )
     logger.info(f"Cohort generation took {time.perf_counter() - t0:.1f}s")
     return 0

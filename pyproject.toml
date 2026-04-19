@@ -5,10 +5,18 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "docling>=2.90.0",
     "folium>=0.20.0",
+    "matplotlib>=3.10.8",
     "networkx>=3.6.1",
     "numpy>=2.4.2",
     "omegaconf>=2.3.0",
     "osmnx>=2.0.7",
     "tqdm>=4.67.3",
 ]
+
+[project.optional-dependencies]
+# Needed only for DQN evaluation runs (runners/dqn.py + rl_backend/).
+# NNA-only workflows don't require torch; install with
+# ``uv sync --extra dqn`` when you need the full six-method harness.
+dqn = ["torch>=2.10.0"]

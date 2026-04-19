@@ -2,9 +2,9 @@
 
 > Purpose, architecture, algorithms, formulas, and operational guide for the
 > evaluation harness under `Benguet Flood and Landslide Data/src/evaluation/`.
-> Intended for teammates reviewing the design and future Claude Code sessions
-> extending it. (The harness originated in `RL_framework/evaluation/` on
-> 2026-04-18 and was migrated to its current location shortly after.)
+> Intended for thesis-team reviewers of the design and future Claude Code
+> sessions extending it. (The harness originated in `RL_framework/evaluation/`
+> on 2026-04-18 and was migrated to its current location shortly after.)
 
 ---
 
@@ -50,35 +50,58 @@ Stage 1  scenario_generator.py  ─►  cohorts/<cohort_id>/cohort.json
                                     cohorts/<cohort_id>/scenarios.jsonl
 
 Stage 2  run_policies.py        ─►  cohorts/<cohort_id>/routes/<algorithm_id>.jsonl
-         (one run per algorithm, all reading the same scenarios.jsonl)
+         (one run per algorithm, all reading the same scenarios.jsonl.
+          Six algorithms registered today: NNA-Dijkstra, NNA-AStar,
+          NNA-Dijkstra-HA, DQN@balanced_HF, DQN@fast_HF, DQN@safe_HF.)
 
 Stage 3  evaluator.py           ─►  cohorts/<cohort_id>/report/metrics.json
-         (reads all routes/*.jsonl; PNGs + HTMLs in future work)
+         (reads all routes/*.jsonl; aggregates per (algorithm, RI);
+          computes robustness post-aggregation. PNGs + HTMLs in future work.)
 ```
 
 Each stage reads and writes plain JSONL. Adding a new DQN variant reruns
 only Stage 2 for that variant. Redefining a metric reruns only Stage 3. No
 policy re-execution is required to iterate on analysis.
 
+> **Step-by-step commands, expected outputs, and manual verification
+> checklists** for every stage live in
+> [`experimental_setup_blueprint_e2e.md`](./experimental_setup_blueprint_e2e.md).
+> That document is the operational companion to this design README.
+
 ### Directory layout
 
 ```
 Benguet Flood and Landslide Data/src/evaluation/
 ├── __init__.py
-├── README.md                   <-- this file
+├── README.md                              <-- this file (design & rationale)
+├── experimental_setup_blueprint_e2e.md    <-- operational commands + verification
 ├── schemas.py                  Scenario, Route, Cohort, EdgeStep + JSONL I/O
 ├── scenario_generator.py       Stage 1 entry point
-├── run_policies.py             Stage 2 entry point
-├── evaluator.py                Stage 3 entry point
+├── run_policies.py             Stage 2 entry point (6 algorithms wired)
+├── evaluator.py                Stage 3 entry point (+ robustness post-agg)
 ├── runners/
 │   ├── __init__.py
 │   ├── base.py                 GraphView, Policy protocol, fair-replan loop
-│   └── nna.py                  NNA-Dijkstra (fair replan)
+│   ├── nna.py                  NNA-Dijkstra (fair replan)
+│   ├── nna_astar.py            NNA-AStar  (A* + fair replan)
+│   ├── nna_ha.py               NNA-Dijkstra-HA (hazard-aware oracle)
+│   ├── _rl_backend.py          re-exports of the vendored RL backend
+│   └── dqn.py                  DQNRunner (per-profile, per-RI dispatch)
+├── rl_backend/                 vendored RL inference + env module
+│   ├── __init__.py
+│   ├── README.md               snapshot policy, architecture invariants
+│   ├── rl_routing_wCUDA_wCheckP.py
+│   └── utils/graph_utils.py
 ├── metrics/
 │   ├── __init__.py             metric registry
 │   ├── success.py
 │   ├── travel_time.py
-│   └── hazard_exposure.py      manuscript §3.6.1 C
+│   ├── hazard_exposure.py      manuscript §3.6.1 C
+│   └── robustness.py           post-aggregation only (not in REGISTRY)
+├── configs/hazard_training_final/
+│   ├── balanced_HF/stage_200_balanced_HF_RI{1..5}_det.json
+│   ├── fast_HF/stage_200_fast_HF_RI{1..5}_det.json
+│   └── safe_HF/stage_200_safe_HF_RI{1..5}_det.json
 └── cohorts/
     └── <cohort_id>/
         ├── cohort.json
@@ -86,6 +109,22 @@ Benguet Flood and Landslide Data/src/evaluation/
         ├── routes/<algo_id>.jsonl   (one file per algorithm)
         └── report/metrics.json
 ```
+
+Outside `src/evaluation/` but used at runtime:
+
+```
+Benguet Flood and Landslide Data/models/rl_checkpoints/
+├── README.md                  15-checkpoint provenance / architecture
+├── balanced_HF/stage_200_balanced_HF_RI{1..5}_det/best_model.pt
+├── fast_HF/stage_200_fast_HF_RI{1..5}_det/best_model.pt
+└── safe_HF/stage_200_safe_HF_RI{1..5}_det/best_model.pt
+```
+
+> **Historical artifact note.** `cohorts/*/routes/DQN@*.jsonl` files
+> produced before the backend was vendored still have old
+> `policy_metadata.checkpoint_root` paths baked in. That field is
+> informational only; re-running Stage 2 overwrites those files with
+> the new in-project paths. Not a bug.
 
 ---
 
@@ -195,19 +234,26 @@ Notes:
 ```bash
 python -m src.evaluation.run_policies \
     --cohort-dir src/evaluation/cohorts/la_trinidad_mini \
-    --algorithms NNA-Dijkstra
+    --algorithms NNA-Dijkstra NNA-AStar NNA-Dijkstra-HA \
+                  DQN@balanced_HF DQN@fast_HF DQN@safe_HF
 ```
 
-Currently only `NNA-Dijkstra` is registered. Extension pattern:
+Six algorithms are registered today in `POLICY_FACTORIES`
+(`run_policies.py`): `NNA-Dijkstra`, `NNA-AStar`, `NNA-Dijkstra-HA`,
+and three DQN profiles (`DQN@balanced_HF`, `DQN@fast_HF`,
+`DQN@safe_HF`). Each DQN runner internally dispatches to the
+RI-matched specialist checkpoint (see §5.4). Extension pattern:
 
 - Add a new runner class under `runners/` implementing the `Policy`
   protocol in `runners/base.py`.
 - Register it in `POLICY_FACTORIES` in `run_policies.py`.
 - Pass its id on the command line.
 
-You can also pass multiple algorithms in one call
-(`--algorithms NNA-Dijkstra NNA-A* DQN@balanced_HF_RI3`). Each produces a
-separate `routes/<algorithm_id>.jsonl` file.
+Each algorithm produces a separate `routes/<algorithm_id>.jsonl` file.
+Invoke from inside `RL_framework/`'s venv so torch is available for
+the DQN runners (NNA-only subsets work without torch). See
+[`experimental_setup_blueprint_e2e.md`](./experimental_setup_blueprint_e2e.md)
+§4 for concrete command recipes per experiment type.
 
 ### Stage 3 — evaluate
 
@@ -272,14 +318,26 @@ RI indicates the NNA is making plans that conflict with the actual block
 realization — which is exactly what we'd expect from a hazard-blind
 algorithm and what the DQN should outperform.
 
-### 5.2 NNA-A\*  — *deferred to next session*
+### 5.2 NNA-A\* (algorithm_id: `NNA-AStar`)  — **implemented**
 
-Identical to NNA-Dijkstra except `nx.astar_path(... heuristic=euclidean)`
-replaces `nx.dijkstra_path`. Same fair-replan contract. The helper
-`run_nna_with_fair_replan` in `runners/base.py` is already generic over
-`path_fn`; implementing the A\* runner is ~30 lines.
+Identical to NNA-Dijkstra except `nx.astar_path` replaces `nx.dijkstra_path`
+for the initial plan. Same fair-replan contract — replan on blocked edges
+still uses Dijkstra internally (the helper in `runners/base.py` hardcodes
+Dijkstra for local repair, which is fine for our purposes).
 
-### 5.3 NNA-Dijkstra-HA (hazard-aware oracle)  — *deferred*
+The heuristic is a flat-earth Euclidean-minutes estimate tuned for La
+Trinidad's latitude (~16.4°N). It uses `x`/`y` node attributes (OSM
+longitude/latitude) and divides straight-line distance by 30 km/h to
+produce a lower-bound time estimate — keeping the heuristic admissible
+for the `base_time` weight.
+
+**algorithm_id note:** persisted as `NNA-AStar` (not `NNA-A*`) because
+asterisks are invalid in Windows filenames, and the id is used as the
+routes-file basename. Docs and presentations can still call it "NNA-A*".
+
+Implementation: `runners/nna_astar.py`.
+
+### 5.3 NNA-Dijkstra-HA (hazard-aware oracle)  — **implemented**
 
 **What it sees at plan time:** the **activated** graph — the passable
 subgraph with `travel_time` set to the RI-adjusted, hazard-weighted
@@ -304,7 +362,46 @@ assumes perfect hazard foresight — an unrealistic condition in real-world
 deployment. The fair head-to-head is DQN vs NNA-Dijkstra / NNA-A\*. NNA-HA
 tells the reader "how close does the DQN get to an oracle?".
 
-### 5.4 DQN  — *deferred*
+### 5.4 DQN (algorithm_ids: `DQN@balanced_HF`, `DQN@fast_HF`, `DQN@safe_HF`)  — **implemented**
+
+Three runners, one per reward-profile variant. Each runner is a thin
+wrapper (`runners/dqn.py`) around the `HazardRoutingEnv` and `DQN`
+classes in the **vendored RL backend** at
+`src/evaluation/rl_backend/rl_routing_wCUDA_wCheckP.py` (re-exported
+via `runners/_rl_backend.py`). The backend ships inside the project —
+no external `sys.path` splicing; install torch once with
+`uv sync --extra dqn`.
+
+**Per-RI checkpoint dispatch.** Each profile has 5 RI-specialist
+checkpoints (RI1..RI5), all fine-tuned from the same profile
+pretrain. At inference, each runner loads checkpoints lazily
+(first scenario at a given RI triggers the load) and selects by
+`scenario.rain_level`. So `DQN@balanced_HF` is a single algorithm_id
+in the report but internally routes each scenario through the
+RI-matched specialist.
+
+**Graph / node-id translation.** The backend's env uses integer node
+indices (`nx.convert_node_labels_to_integers`), while our harness
+persists OSM string ids. The runner builds the `str → int` map at
+first-run time by matching `(x, y)` positions between the env's graph
+(loaded from `ckpt["base_graph_node_link"]`) and our cohort's graph.
+
+**num_deliveries caveat.** The bundled checkpoints were trained with
+`num_deliveries=2`; our canonical cohort uses 5. The DQN's MLP
+weights are architecturally count-invariant (pooled unvisited is a
+masked mean), so the checkpoint loads cleanly into a runner with
+`num_delivery_slots=5`. The remaining gap is a semantic OOD on the
+pooled-embedding distribution; see the smoke-test failure-counts
+(`timeout=N`) for an empirical measure of that cost. If the gap
+becomes load-bearing, retrain at `num_deliveries=5`.
+
+**Fairness framing.** DQN and NNA-Dijkstra / NNA-AStar now have
+identical structural block-avoidance: DQN via action-masking,
+baselines via fair replan. The residual difference — choice among
+passable neighbors — is the learned-vs-classical-greedy comparison
+the thesis is making.
+
+### 5.5 DQN — conceptual description (as seen in training)
 
 **What it sees at plan time:** nothing global. It operates step by step.
 
@@ -380,9 +477,11 @@ Every symbol used in this section, in one place.
 | `θ_f(RI)` | Flood-blocking threshold at RI. An edge with `H_f,e ≥ θ_f(RI)` is eligible for blocking. From Table 4 / `_det` configs: RI1 → 1.1 (never), RI2 → 1.0, RI3 → 0.6, RI4 → 0.6, RI5 → 0.6. |
 | `θ_l(RI)` | Landslide-blocking threshold at RI. RI1–3 → 1.1 (never), RI4 → 1.0, RI5 → 0.6. |
 | `μ(RI)` | Speed multiplier at RI. RI1 → 0.94, RI2 → 0.90, RI3 → 0.85, RI4 → 0.40, RI5 → 0.20. Multiplies the baseline speed `v_e`. Lower = slower. |
-| `w_f` | Flood weight in the hazard-aware travel-time and exposure formulas. 0.6 per `_det` config reward defaults. |
-| `w_l` | Landslide weight. 0.4. |
-| `λ_hazard(e)` | Hazard-induced travel-time multiplier for edge `e`: `1 + w_f · H_f,e + w_l · H_l,e`. A completely safe edge has λ = 1 (no extra time); a worst-case edge (H_f = H_l = 1) has λ = 2. |
+| `α_f` | **Flood travel-time drag weight.** From manuscript §B, empirically calibrated. 0.5 in the `_det` configs (`hazard.flood_time_weight`). Used ONLY in the travel-time formula. |
+| `α_l` | **Landslide travel-time drag weight.** 0.5 (`hazard.landslide_time_weight`). |
+| `w_f` | **Flood reward/exposure weight.** From manuscript §D (reward penalty) and §6.4.3 (safety metric). 0.6 per `_det` config's `reward.w_flood` and `metrics/hazard_exposure.py`. **Never appears in the travel-time formula — that's what α is for.** |
+| `w_l` | **Landslide reward/exposure weight.** 0.4. |
+| `λ_hazard(e)` | Hazard-induced travel-time multiplier for edge `e`: `1 + α_f · H_f,e + α_l · H_l,e`. Safe edge → λ = 1; worst-case (H_f = H_l = 1) with α_f = α_l = 0.5 → λ = 2. |
 | `T_e(RI)` | Effective travel time of edge `e` at rainfall RI, in minutes. |
 | `R` | A route — an ordered sequence of traversed edges. |
 | `L(R)` | Total length of route `R` in meters (`Σ_{e ∈ R} L_e`). |
@@ -409,7 +508,7 @@ under rainfall RI is:
 ```
    T_e(RI)  =  base_time_e                        baseline minutes
               ÷ μ(RI)                             speed reduction
-              × (1 + w_f · H_f,e + w_l · H_l,e)   hazard drag (= λ_hazard)
+              × (1 + α_f · H_f,e + α_l · H_l,e)   hazard drag (= λ_hazard)
 ```
 
 Two factors multiply together:
@@ -420,8 +519,29 @@ Two factors multiply together:
   RI.
 - **Hazard drag `λ_hazard`** captures per-edge extra slowness for
   traversing hazardous zones (reduced visibility, cautious driving,
-  partial water, debris, etc.). At worst it doubles the time (edge with
-  H_f = H_l = 1 has `λ = 1 + 0.6 + 0.4 = 2`).
+  partial water, debris, etc.). With `α_f = α_l = 0.5` (the current
+  `_det` calibration), a worst-case edge (H_f = H_l = 1) has
+  `λ = 1 + 0.5 + 0.5 = 2`.
+
+**α vs w — don't conflate them.** The manuscript uses two distinct
+symbol sets:
+
+- **α_f, α_l (travel-time drag weights)** appear only here, in
+  `λ_hazard`. Sourced from `hazard.flood_time_weight` /
+  `hazard.landslide_time_weight` in the `_det` config. Empirically
+  calibrated to 0.5/0.5.
+- **w_f, w_l (reward / hazard-exposure weights)** appear in the training
+  reward penalty (§D) and in the hazard-exposure safety metric
+  (§6.4.3). 0.6/0.4 per `_det` config `reward.w_flood` /
+  `reward.w_landslide`. **They do NOT appear in the travel-time
+  formula.**
+
+An earlier version of `scenario_generator.py` used `w_f, w_l` in the
+λ formula (the "_det reward defaults" in the hardcoded constants were
+the old 0.6/0.4). That was a code-level bug that silently produced
+travel times diverging from what the DQN saw during training. Fixed;
+the generator now reads α from the config, falling back to the 0.5/0.5
+module defaults.
 
 `T_e(RI)` is computed once per (edge, RI) in `compute_travel_time_map` and
 persisted in `scenario.travel_time_map`. Policies read it at
@@ -515,7 +635,7 @@ metric fixes all three.
 **NaN on failure** — like travel time, hazard exposure is only meaningful
 for completed routes.
 
-#### 6.4.4 Robustness (planned, `metrics/robustness.py`)
+#### 6.4.4 Robustness (`metrics/robustness.py`) — **implemented**
 
 Manuscript §3.6.1 E:
 
@@ -527,8 +647,21 @@ A robustness score near 1.0 means the metric is consistent across RI₁ –
 RI₅. A low score means the policy degrades sharply at high RI. Curriculum
 learning is supposed to improve this; this metric validates that claim.
 
-Implementation is deferred — the evaluator already aggregates per-RI
-means, so this metric is a trivial addition once the data is in place.
+**Implementation.** Unlike the other metrics, robustness is a *second-
+order* statistic — it consumes per-RI means, not per-route values.
+`metrics/robustness.py` exports `compute_robustness_ratio(ri_means)`; the
+evaluator calls it once per `(algorithm, metric)` pair after the main
+aggregation loop and stores the result in
+`report["algorithms"][algo_id]["robustness"][metric_name]`.
+
+Because of that shape, robustness is NOT in `metrics.REGISTRY` (which is
+the per-route dispatch table). It's populated by the
+`_attach_robustness` hook in `evaluator.py` after `_safe_stats` has run.
+
+Guard: returns `None` if fewer than two RI means are available or if
+`|μ| < 1e-9` (to avoid divide-by-zero). Null robustness values mean
+"metric wasn't applicable on enough RIs to judge" rather than "policy
+is not robust."
 
 #### 6.4.5 Replan count (currently reported as diagnostic, not a metric)
 
@@ -572,10 +705,17 @@ the intentional experimental variables.
 
 ---
 
-## 8. Sample end-to-end run (traceable output)
+## 8. Sample end-to-end run (traceable output — legacy, pre-α-fix)
 
-The following was produced by the smoke test on 2026-04-18 on the
-`selected_subgraph_n200` graph. Use it to sanity-check your own runs.
+The following was produced by the initial smoke test on 2026-04-18 on the
+`selected_subgraph_n200` graph, **before** the `α_f / α_l` travel-time
+weight fix (see §6.3). The blocked-edge counts and SCC sizes are
+α-independent (blocking is a threshold test on raw hazard scores), so
+those numbers are still exact. The per-edge `travel_time` and aggregate
+`travel_time`/`hazard_exposure` means are off by ~6% from post-fix
+runs — read the structural ratios, not the absolute magnitudes. The
+most recent six-method smoke-test numbers live in
+[`experimental_setup_blueprint_e2e.md`](./experimental_setup_blueprint_e2e.md) §5.
 
 ### 8.1 Stage 1 run
 
@@ -734,32 +874,40 @@ harness or an unexpected graph property — investigate.
 2. Register in `POLICY_FACTORIES` in `run_policies.py`.
 3. Invoke via `--algorithms <name>`.
 
-### 9.2 Add a new DQN variant (once `runners/dqn.py` exists)
+### 9.2 Add a new DQN variant
 
-Plan: the DQN runner accepts an `algorithms_manifest.json` like:
+`runners/dqn.py` already implements one `DQNRunner` per reward-profile
+with lazy per-RI checkpoint dispatch. To add a fourth profile
+(say, `aggressive_HF`):
 
-```json
-{
-  "baselines": ["NNA-Dijkstra", "NNA-A*"],
-  "dqn_variants": [
-    {
-      "id": "balanced_HF_RI3",
-      "config": "src/evaluation/configs/hazard_training_final/balanced_HF/stage_200_balanced_HF_RI3_det.json",
-      "checkpoint": "checkpoints/balanced_HF_RI3/ckpt_best.pt",
-      "eval_mode": "greedy"
-    },
-    {
-      "id": "safe_HF_RI3",
-      "config": "src/evaluation/configs/hazard_training_final/safe_HF/stage_200_safe_HF_RI3_det.json",
-      "checkpoint": "checkpoints/safe_HF_RI3/ckpt_best.pt",
-      "eval_mode": "greedy"
-    }
-  ]
-}
-```
+1. Ensure a directory tree exists under
+   `models/rl_checkpoints/aggressive_HF/stage_200_aggressive_HF_RI{1..5}_det/best_model.pt`.
+2. Copy a representative `_det.json` config to
+   `src/evaluation/configs/hazard_training_final/aggressive_HF/stage_200_aggressive_HF_RI3_det.json`
+   (RI3 is conventional — architecture is RI-invariant per profile).
+3. In `run_policies.py` extend `POLICY_FACTORIES`:
 
-Stage 2 instantiates one runner per entry, each with its own
-`algorithm_id`.
+   ```python
+   "DQN@aggressive_HF": lambda: _make_dqn_runner("aggressive_HF"),
+   ```
+
+   The existing `_make_dqn_runner(profile)` helper handles everything
+   else (checkpoint root, config path resolution, lazy loading).
+
+4. Invoke via `--algorithms DQN@aggressive_HF`. The runner picks
+   `RI{scenario.rain_level}` automatically; no per-RI flag.
+
+To change the *architecture* (e.g., larger hidden dims, different
+`node_embedding_dim`), edit the representative config for that profile
+and retrain the checkpoint set — then step 3 is unchanged because the
+runner just swaps `state_dict`s into whatever architecture the config
+specifies.
+
+> **Standalone note:** the DQN runner depends only on the vendored RL
+> backend at `src/evaluation/rl_backend/` and the bundled checkpoints
+> at `models/rl_checkpoints/`. Both ship with this project — no
+> external repo is needed. See §11 and the blueprint for the
+> self-contained install flow.
 
 ### 9.3 Add a new metric
 
@@ -786,34 +934,51 @@ num_scenarios=2500, num_deliveries=5, master_seed=42, deterministic_v3.
 
 ## 10. What's intentionally NOT in v1
 
+**Implemented since the initial v1**: NNA-A\*, NNA-Dijkstra-HA, Robustness
+metric (§5.2, §5.3, §6.4.4), and the DQN runner with per-RI dispatch
+for the three profiles (§5.4). Still deferred:
+
 | Deferred | Reason |
 |---|---|
-| NNA-A\* runner | Trivial copy of NNA-Dijkstra with `astar_path`; deferred to reduce surface area for review. |
-| NNA-Dijkstra-HA runner | Needs the "activated graph with travel_time" view — conceptually simple, just not yet coded. |
-| DQN runner | Needs careful import from the training script and checkpoint-loading machinery; deserves its own session. |
-| Robustness metric | Depends on per-RI aggregates already existing in the report JSON; mostly plumbing. |
+| Retraining DQN at `num_deliveries=5` | Current checkpoints were trained at 2; the runner loads them into 5-slot inference (count-invariant pool), producing a ~10–20% timeout tax. Retraining closes the OOD gap; out of scope for the runner session. |
 | Folium HTML replays and aggregate PNG plots (`visualization.py`) | Nice-to-have for qualitative inspection; not on the critical path for producing numbers. |
 | Probabilistic-mode cohort | Deterministic_v3 is the locked direction; probabilistic is legacy only. |
 | pytest suite | The verification-plan section of the plan file lists six tests to implement. |
+
+> **Running experiments today:** consult
+> [`experimental_setup_blueprint_e2e.md`](./experimental_setup_blueprint_e2e.md)
+> for the full suite of validated command recipes (smoke test, canonical
+> thesis cohort, per-profile ablations, probabilistic legacy mode, α
+> overrides), expected outputs, per-stage manual verification
+> checklists, and a "Scaling & Code-Cleaning Notes" section that
+> documents the current hardcoded cross-repo paths.
 
 ---
 
 ## 11. References
 
-- `.claude/plans/do-a-deep-dive-generic-simon.md` — the working plan file.
+- [`experimental_setup_blueprint_e2e.md`](./experimental_setup_blueprint_e2e.md)
+  — operational companion: commands, expected outputs, manual
+  verification checklists, data-gathering workflow, scaling notes.
 - `HANDOFF_2026-04-18.md` — session-level handoff at the parent repo root.
 - `CLAUDE.md` — parent-repo orientation for future Claude Code sessions.
 - Manuscript `thesis_manuscript.docx` (or `thesis_manuscript.md` after
   pandoc conversion) — §3.1.2, §3.1.3, §3.5, §3.6 are the methodology
-  this harness implements.
-- `../RL_framework/rl_routing_wCUDA_wCheckP_latest.py` — canonical training
-  script (lives in the sibling RL_framework repo). Lines referenced in
-  §5.4 above are the parts the DQN runner will import once implemented.
-  This is the only remaining cross-repo dependency and is load-bearing
-  only for DQN evaluation, not for NNA baselines.
+  this harness implements. §B (α_f, α_l travel-time drag) and §D (w_f,
+  w_l reward-penalty) are the weight schemas referenced in §6.1 / §6.3.
+- `src/evaluation/rl_backend/rl_routing_wCUDA_wCheckP.py` — vendored
+  training/inference module. The DQN runner imports `HazardRoutingEnv`,
+  `DQN`, `select_action`, `load_config`, and `apply_runtime_config`
+  from it via the re-export adapter `runners/_rl_backend.py`. No
+  `sys.path` manipulation. Load-bearing only for DQN evaluation; NNA
+  runners don't depend on this module or on torch.
+- `models/rl_checkpoints/{profile}/stage_200_{profile}_RI{1..5}_det/best_model.pt`
+  — 15 bundled checkpoints (3 profiles × 5 RIs) the DQNRunner
+  dispatches to. ~7.5 MB total; committed directly.
 - `_det` activation configs under
   `src/evaluation/configs/hazard_training_final/*/*_det.json` — source of
-  truth for rain-level thresholds and speed multipliers, copied verbatim
-  from `RL_framework/configs/hazard_training_final/` so that Benguet can
-  regenerate cohorts standalone. Any `_det.json` can be passed to
+  truth for rain-level thresholds, speed multipliers, and (post-α-fix)
+  `hazard.flood_time_weight` / `hazard.landslide_time_weight`. Copied
+  verbatim from `RL_framework/configs/hazard_training_final/` so Benguet
+  can regenerate cohorts standalone. Any `_det.json` can be passed to
   `scenario_generator.py --config`.

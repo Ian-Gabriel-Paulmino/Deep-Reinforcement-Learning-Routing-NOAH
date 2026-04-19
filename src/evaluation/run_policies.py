@@ -21,6 +21,8 @@ from typing import Optional
 
 from .runners.base import build_graph_view
 from .runners.nna import NNADijkstra
+from .runners.nna_astar import NNAAStar
+from .runners.nna_ha import NNADijkstraHA
 from .scenario_generator import load_graph
 from .schemas import read_cohort, read_scenarios, write_jsonl
 
@@ -28,8 +30,36 @@ from .schemas import read_cohort, read_scenarios, write_jsonl
 logger = logging.getLogger("evaluation.run_policies")
 
 
+# Paths to the bundled DQN training artifacts, relative to the
+# Benguet project root. From this file: evaluation → src → project root.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DQN_CHECKPOINT_ROOT = _PROJECT_ROOT / "models" / "rl_checkpoints"
+_DQN_CONFIG_ROOT = (
+    Path(__file__).resolve().parent
+    / "configs"
+    / "hazard_training_final"
+)
+
+
+def _make_dqn_runner(profile: str):
+    # Lazy import keeps torch off the critical path for baseline-only runs.
+    from .runners.dqn import DQNRunner
+
+    return DQNRunner(
+        algorithm_id=f"DQN@{profile}",
+        profile=profile,
+        checkpoint_root=_DQN_CHECKPOINT_ROOT,
+        config_path=_DQN_CONFIG_ROOT / profile / f"stage_200_{profile}_RI3_det.json",
+    )
+
+
 POLICY_FACTORIES = {
     "NNA-Dijkstra": lambda: NNADijkstra(),
+    "NNA-AStar": lambda: NNAAStar(),
+    "NNA-Dijkstra-HA": lambda: NNADijkstraHA(),
+    "DQN@balanced_HF": lambda: _make_dqn_runner("balanced_HF"),
+    "DQN@fast_HF": lambda: _make_dqn_runner("fast_HF"),
+    "DQN@safe_HF": lambda: _make_dqn_runner("safe_HF"),
 }
 
 

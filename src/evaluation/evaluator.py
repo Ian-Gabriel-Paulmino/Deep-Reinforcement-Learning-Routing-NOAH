@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from .metrics import REGISTRY
+from .metrics.robustness import compute_robustness_ratio
 from .schemas import Route, Scenario, read_cohort, read_jsonl, read_scenarios
 
 
@@ -43,6 +44,24 @@ def _safe_stats(values: list[float]) -> dict[str, float]:
         "min": float(min(filtered)),
         "max": float(max(filtered)),
     }
+
+
+def _attach_robustness(report: dict) -> None:
+    """Populate ``report["algorithms"][algo_id]["robustness"]`` in place.
+
+    Robustness = 1 - σ/μ across per-RI means, per (algorithm, metric).
+    See `metrics/robustness.py` for the definition and manuscript §3.6.1 E.
+    """
+    for algo_id, info in report["algorithms"].items():
+        robustness: dict[str, Optional[float]] = {}
+        for metric_name, buckets in info["metrics"].items():
+            ri_means = [
+                buckets[ri]["mean"]
+                for ri in buckets
+                if ri != "all" and buckets[ri].get("mean") is not None
+            ]
+            robustness[metric_name] = compute_robustness_ratio(ri_means)
+        info["robustness"] = robustness
 
 
 def evaluate(cohort_dir: Path, out_dir: Optional[Path] = None) -> dict:
@@ -110,6 +129,8 @@ def evaluate(cohort_dir: Path, out_dir: Optional[Path] = None) -> dict:
             "metrics": per_metric_stats,
         }
 
+    _attach_robustness(report)
+
     report_path = out_dir / "metrics.json"
     with report_path.open("w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, sort_keys=True)
@@ -167,6 +188,16 @@ def _print_summary(report: dict) -> None:
                 for ri in ri_keys
             )
             print(ri_line)
+
+        # Robustness (1 - σ/μ across RI means) per metric
+        robustness = info.get("robustness", {})
+        rob_parts = []
+        for metric_name in ("success", "travel_time", "hazard_exposure"):
+            val = robustness.get(metric_name)
+            if val is not None:
+                rob_parts.append(f"{metric_name}={val:.3f}")
+        if rob_parts:
+            print("    robustness:  " + "  ".join(rob_parts))
 
 
 def main(argv: Optional[list[str]] = None) -> int:
