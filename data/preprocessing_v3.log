@@ -1,0 +1,86 @@
+2026-04-18 02:24:08  INFO     prepare_data  ========================================================================
+2026-04-18 02:24:08  INFO     prepare_data  HAZARD-AWARE ROUTING — DATA PREPROCESSING (v3)
+2026-04-18 02:24:08  INFO     prepare_data  ========================================================================
+2026-04-18 02:24:08  INFO     prepare_data    Description:   Canonical-3 landslide mapping; parallels flood; NOAH-aligned 3-class scheme
+2026-04-18 02:24:08  INFO     prepare_data    Output graphml: data/la_trinidad_hazard_graph.graphml
+2026-04-18 02:24:08  INFO     prepare_data    Manifest:       data/preprocessing_manifest.json
+2026-04-18 02:24:08  INFO     prepare_data    Log:            data/preprocessing_v3.log
+2026-04-18 02:24:08  INFO     prepare_data  
+2026-04-18 02:24:08  INFO     prepare_data  [Step 1] Download road network from OpenStreetMap
+2026-04-18 02:24:08  INFO     prepare_data  ------------------------------------------------------------------------
+2026-04-18 02:24:08  INFO     prepare_data    Place:             La Trinidad, Benguet, Philippines
+2026-04-18 02:24:08  INFO     prepare_data    Network type:      drive
+2026-04-18 02:24:08  INFO     prepare_data    Base speed:        30.0 km/h
+2026-04-18 02:24:13  INFO     prepare_data    OSM download complete in 4.3s
+2026-04-18 02:24:13  INFO     prepare_data    Nodes:             1,447
+2026-04-18 02:24:13  INFO     prepare_data    Edges:             3,137
+2026-04-18 02:24:13  INFO     prepare_data    Total road length: 496.2 km
+2026-04-18 02:24:13  INFO     prepare_data  
+2026-04-18 02:24:13  INFO     prepare_data  [Step 2] Load NOAH hazard shapefiles
+2026-04-18 02:24:13  INFO     prepare_data  ------------------------------------------------------------------------
+2026-04-18 02:24:13  INFO     prepare_data    Loading flood shapefile: data\raw\noah\flood_hazard\Benguet_Flood_25year.shp
+2026-04-18 02:24:13  INFO     prepare_data      3 polygons loaded
+2026-04-18 02:24:13  INFO     prepare_data      Classes present: [1, 2, 3]
+2026-04-18 02:24:13  INFO     prepare_data        class 1: 1 polygons -> score 0.2
+2026-04-18 02:24:13  INFO     prepare_data        class 2: 1 polygons -> score 0.6
+2026-04-18 02:24:13  INFO     prepare_data        class 3: 1 polygons -> score 1.0
+2026-04-18 02:24:13  INFO     prepare_data    Loading landslide shapefile: data\raw\noah\landslide_susceptibility\Benguet_LandslideHazards.shp
+2026-04-18 02:24:18  INFO     prepare_data      3 polygons loaded
+2026-04-18 02:24:18  INFO     prepare_data      Classes present: [1, 2, 3]
+2026-04-18 02:24:18  INFO     prepare_data        class 1: 1 polygons -> score 0.2
+2026-04-18 02:24:18  INFO     prepare_data        class 2: 1 polygons -> score 0.6
+2026-04-18 02:24:18  INFO     prepare_data        class 3: 1 polygons -> score 1.0
+2026-04-18 02:24:18  INFO     prepare_data  
+2026-04-18 02:24:18  INFO     prepare_data  [Step 3] Overlay hazard data on road network
+2026-04-18 02:24:18  INFO     prepare_data  ------------------------------------------------------------------------
+2026-04-18 02:24:18  INFO     prepare_data    Sampling interval: 10.0 m
+2026-04-18 02:32:52  INFO     prepare_data  
+2026-04-18 02:32:52  INFO     prepare_data    Overlay complete in 514.2s
+2026-04-18 02:32:52  INFO     prepare_data    Total samples queried:      51,384
+2026-04-18 02:32:52  INFO     prepare_data    Edges with flood hazard:    1083 (34.5%)
+2026-04-18 02:32:52  INFO     prepare_data    Edges with landslide:       1944 (62.0%)
+2026-04-18 02:32:52  INFO     prepare_data    Edges with any hazard:      2581 (82.3%)
+2026-04-18 02:32:52  INFO     prepare_data  
+2026-04-18 02:32:52  INFO     prepare_data  [Step 4] Save graph as GraphML
+2026-04-18 02:32:52  INFO     prepare_data  ------------------------------------------------------------------------
+2026-04-18 02:32:52  INFO     prepare_data    Output:                     data\la_trinidad_hazard_graph.graphml
+2026-04-18 02:32:52  INFO     prepare_data    Format:                     graphml (DiGraph)
+2026-04-18 02:32:52  INFO     prepare_data    Nodes:                      1,447
+2026-04-18 02:32:52  INFO     prepare_data    Edges:                      3,112 (25 parallel collapsed)
+2026-04-18 02:32:52  INFO     prepare_data    File size:                  1.18 MB
+2026-04-18 02:32:52  INFO     prepare_data  
+2026-04-18 02:32:52  INFO     prepare_data  [Step 5] Verify graph + compute score distributions
+2026-04-18 02:32:52  INFO     prepare_data  ------------------------------------------------------------------------
+2026-04-18 02:32:52  INFO     prepare_data    edge attr flood_score        ok
+2026-04-18 02:32:52  INFO     prepare_data    edge attr landslide_score    ok
+2026-04-18 02:32:52  INFO     prepare_data    edge attr flood_class        ok
+2026-04-18 02:32:52  INFO     prepare_data    edge attr landslide_class    ok
+2026-04-18 02:32:52  INFO     prepare_data    edge attr sample_count       ok
+2026-04-18 02:32:52  INFO     prepare_data    edge attr base_time          ok
+2026-04-18 02:32:52  INFO     prepare_data    edge attr length             ok
+2026-04-18 02:32:52  INFO     prepare_data  
+2026-04-18 02:32:52  INFO     prepare_data    flood scores:      mean=0.223  max=1.00  nonzero=1072/3112 (34.4%)
+2026-04-18 02:32:52  INFO     prepare_data      distribution:    {'0.00': 2040, '0.20': 306, '0.60': 333, '1.00': 433}
+2026-04-18 02:32:52  INFO     prepare_data    landslide scores:  mean=0.402  max=1.00  nonzero=1927/3112 (61.9%)
+2026-04-18 02:32:52  INFO     prepare_data      distribution:    {'0.00': 1185, '0.20': 337, '0.60': 1017, '1.00': 573}
+2026-04-18 02:32:52  INFO     prepare_data  
+2026-04-18 02:32:52  INFO     prepare_data    Blocking preview (deterministic RI thresholds; eligible = score >= threshold):
+2026-04-18 02:32:52  INFO     prepare_data      RI   theta_f  theta_l  Flood elig    LS elig      Union
+2026-04-18 02:32:52  INFO     prepare_data      RI1   1.10     1.10              0          0          0
+2026-04-18 02:32:52  INFO     prepare_data      RI2   1.00     1.10            433          0        433
+2026-04-18 02:32:53  INFO     prepare_data      RI3   0.60     1.10            766          0        766
+2026-04-18 02:32:53  INFO     prepare_data      RI4   0.60     1.00            766        573       1183
+2026-04-18 02:32:53  INFO     prepare_data      RI5   0.60     0.60            766       1590       2094
+2026-04-18 02:32:53  INFO     prepare_data  
+2026-04-18 02:32:53  INFO     prepare_data    Connectivity: 1 SCCs; largest has 1,447 nodes (100.0% of graph)
+2026-04-18 02:32:53  INFO     prepare_data    Edge / node ratio: 2.15
+2026-04-18 02:32:53  INFO     prepare_data  
+2026-04-18 02:32:53  INFO     prepare_data  [Step 6] Write preprocessing manifest
+2026-04-18 02:32:53  INFO     prepare_data  ------------------------------------------------------------------------
+2026-04-18 02:32:53  INFO     prepare_data    Wrote: data\preprocessing_manifest.json
+2026-04-18 02:32:53  INFO     prepare_data  ========================================================================
+2026-04-18 02:32:53  INFO     prepare_data  PREPROCESSING COMPLETE in 524.3s
+2026-04-18 02:32:53  INFO     prepare_data  ========================================================================
+2026-04-18 02:32:53  INFO     prepare_data    Ready:   data/la_trinidad_hazard_graph.graphml
+2026-04-18 02:32:53  INFO     prepare_data  
+2026-04-18 02:32:53  INFO     prepare_data    Next: python -m src.data.visualize_hazards

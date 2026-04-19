@@ -1,0 +1,4 @@
+19:32:40  INFO     Loading graphml: data\la_trinidad_hazard_graph.graphml
+19:32:40  INFO       pipeline_version=v3, nodes=1447, edges=3112
+19:32:40  INFO     Loading archive gpickle for edge geometries: archive\v1_3class_wrong_ls\la_trinidad_hazard_graph.gpickle
+19:32:40  INFO       loaded 3,112 edge geometries from archive
