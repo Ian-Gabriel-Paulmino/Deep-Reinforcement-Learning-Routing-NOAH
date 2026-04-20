@@ -35,11 +35,17 @@ class GraphView:
       policy may use it for replanning on encountered blockage.
     - ``activated_graph`` is ``passable_graph`` with ``travel_time`` set per
       the scenario's ``travel_time_map``. Oracle-only (NNA-HA).
+    - ``hazard_aware_full_graph`` is ``base_graph`` (including blocked
+      edges) with ``travel_time`` set per the scenario's
+      ``travel_time_map``. Used by hazard-aware block-blind variants
+      (NNA-Dijkstra-HA-Blind) that plan on the full graph with λ-drag
+      weights but have no block foresight at plan time.
     """
 
     base_graph: nx.DiGraph
     passable_graph: nx.DiGraph
     activated_graph: nx.DiGraph
+    hazard_aware_full_graph: nx.DiGraph
 
 
 def build_graph_view(base_graph: nx.DiGraph, scenario: Scenario) -> GraphView:
@@ -59,7 +65,28 @@ def build_graph_view(base_graph: nx.DiGraph, scenario: Scenario) -> GraphView:
         new_data = dict(data)
         new_data["travel_time"] = float(tt)
         activated.add_edge(u, v, **new_data)
-    return GraphView(base_graph=base_graph, passable_graph=passable, activated_graph=activated)
+
+    # Hazard-aware full graph: base_graph (with blocked edges included) +
+    # travel_time attrs. For block-blind hazard-aware variants that plan on
+    # the full graph with λ-drag weights. travel_time_map already covers
+    # every edge (blocked or not) because scenario_generator.py populates
+    # it over G.edges() without filtering.
+    ha_full = nx.DiGraph()
+    ha_full.add_nodes_from(base_graph.nodes(data=True))
+    for u, v, data in base_graph.edges(data=True):
+        tt = scenario.travel_time_map.get(edge_key(u, v))
+        if tt is None:
+            continue  # defensive; shouldn't happen under deterministic_v3
+        new_data = dict(data)
+        new_data["travel_time"] = float(tt)
+        ha_full.add_edge(u, v, **new_data)
+
+    return GraphView(
+        base_graph=base_graph,
+        passable_graph=passable,
+        activated_graph=activated,
+        hazard_aware_full_graph=ha_full,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -279,21 +306,30 @@ def run_nna_blind(
     path_fn,
     plan_on: str,
     policy_metadata: dict,
+    plan_graph: Optional[nx.DiGraph] = None,
 ) -> Route:
-    """Blind execution loop — shared by NNA-Dijkstra-Blind and NNA-AStar-Blind.
+    """Blind execution loop — shared by every "plan once, fail on block" NNA.
 
-    Identical planning to :func:`run_nna_with_fair_replan` (hazard- and
-    block-blind on ``view.base_graph``), but **no replan on blocked-edge
-    encounter**. The policy commits to its plan and fails with
-    ``failure_reason = "blocked"`` the first time the planned next edge is
-    in ``scenario.blocked_set()``.
+    Used by ``NNA-Dijkstra-Blind`` / ``NNA-AStar-Blind`` (plan on
+    ``view.base_graph`` with ``base_time``; hazard- AND block-blind) and
+    by ``NNA-Dijkstra-HA-Blind`` (plan on
+    ``view.hazard_aware_full_graph`` with ``travel_time``; hazard-aware in
+    weights but still block-blind at plan time).
 
-    Mirrors the "fast but blind" baseline — the classical NNA with zero
-    knowledge of blockages at any stage. Expected to underperform the
-    replan-capable NNA and DQN at all RI levels; the gap widens with RI.
+    The policy commits to its plan and fails with
+    ``failure_reason = "blocked"`` the first time the planned next edge
+    is in ``scenario.blocked_set()``. There is no replan, no local repair.
+
+    :param plan_graph: graph the planner sees. Defaults to
+        ``view.base_graph`` for backward compatibility with the original
+        hazard-blind Blind runners. Pass ``view.hazard_aware_full_graph``
+        for hazard-aware block-blind variants. Edge-attribute lookup
+        during execution still uses ``view.base_graph`` (the canonical
+        source of hazard scores, length, base_time).
     """
     t0 = time.perf_counter()
     base_graph = view.base_graph
+    plan_graph = plan_graph if plan_graph is not None else base_graph
     blocked = scenario.blocked_set()
 
     current = scenario.start_node
@@ -308,7 +344,7 @@ def run_nna_blind(
         best_plan: Optional[list[str]] = None
         best_cost = float("inf")
         for target in remaining:
-            path, cost = path_fn(base_graph, current, target, plan_on)
+            path, cost = path_fn(plan_graph, current, target, plan_on)
             if path is not None and cost < best_cost:
                 best_cost = cost
                 best_target = target

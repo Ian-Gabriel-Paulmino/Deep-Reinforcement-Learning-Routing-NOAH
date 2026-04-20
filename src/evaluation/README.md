@@ -51,9 +51,10 @@ Stage 1  scenario_generator.py  ─►  cohorts/<cohort_id>/cohort.json
 
 Stage 2  run_policies.py        ─►  cohorts/<cohort_id>/routes/<algorithm_id>.jsonl
          (one run per algorithm, all reading the same scenarios.jsonl.
-          Eight algorithms registered today: NNA-Dijkstra, NNA-AStar,
+          Nine algorithms registered today: NNA-Dijkstra, NNA-AStar,
           NNA-Dijkstra-Blind, NNA-AStar-Blind, NNA-Dijkstra-HA,
-          DQN@balanced_HF, DQN@fast_HF, DQN@safe_HF.)
+          NNA-Dijkstra-HA-Blind, DQN@balanced_HF, DQN@fast_HF,
+          DQN@safe_HF.)
 
 Stage 3  evaluator.py           ─►  cohorts/<cohort_id>/report/metrics.json
                                     cohorts/<cohort_id>/report/raw_metrics.csv
@@ -82,7 +83,7 @@ Benguet Flood and Landslide Data/src/evaluation/
 ├── experimental_setup_blueprint_e2e.md    <-- operational commands + verification
 ├── schemas.py                  Scenario, Route, Cohort, EdgeStep + JSONL I/O
 ├── scenario_generator.py       Stage 1 entry point
-├── run_policies.py             Stage 2 entry point (8 algorithms wired)
+├── run_policies.py             Stage 2 entry point (9 algorithms wired)
 ├── evaluator.py                Stage 3 entry point (+ robustness + CSV outputs)
 ├── runners/
 │   ├── __init__.py
@@ -92,6 +93,7 @@ Benguet Flood and Landslide Data/src/evaluation/
 │   ├── nna_blind.py            NNA-Dijkstra-Blind (Dijkstra plan, NO replan)
 │   ├── nna_astar_blind.py      NNA-AStar-Blind    (A* plan, NO replan)
 │   ├── nna_ha.py               NNA-Dijkstra-HA (hazard-aware oracle)
+│   ├── nna_ha_blind.py         NNA-Dijkstra-HA-Blind (HA weights, block-blind, NO replan)
 │   ├── _rl_backend.py          re-exports of the vendored RL backend
 │   └── dqn.py                  DQNRunner (per-profile, per-RI dispatch)
 ├── rl_backend/                 vendored RL inference + env module
@@ -443,6 +445,89 @@ assumes perfect hazard foresight — an unrealistic condition in real-world
 deployment. The fair head-to-head is DQN vs NNA-Dijkstra / NNA-A\*. NNA-HA
 tells the reader "how close does the DQN get to an oracle?".
 
+### 5.3b NNA-Dijkstra-HA-Blind (hazard-aware weighting, block-blind, no replan)  — **implemented**
+
+**Despite the HA suffix, this is NOT an oracle.** The policy plans on
+the **full** base graph (including blocked edges) with the hazard-aware
+``travel_time`` weight (λ drag from manuscript §B), and fails with
+``failure_reason = "blocked"`` the first time the planned next edge is
+in ``scenario.blocked_set()``. The "HA" tag refers only to the weighting
+function — not to block foresight. Contrast with §5.3 (true oracle).
+
+**What it sees at plan time:** the full base graph — same edge set as
+the hazard-blind Blind variants (§5.2b), but with ``travel_time``
+attributes populated from ``scenario.travel_time_map`` (hazard-drag
++ RI speed reduction applied). The planner is block-blind; it sees all
+edges including blocked ones, and the λ drag makes high-hazard edges
+look expensive but never infeasible.
+
+**What it sees at execution time:** nothing about blockages. Exactly
+like the Blind variants — proceeds along the planned path until either
+(a) every delivery is visited (success), or (b) the next edge is in
+``scenario.blocked_set()`` (immediate failure, ``"blocked"``).
+
+**Planning loop.** For each unvisited delivery, Dijkstra on
+``view.hazard_aware_full_graph`` with ``weight="travel_time"``. Pick the
+lowest-cost delivery. Traverse the planned path until success or block.
+
+**Failure modes:** ``blocked`` (signature failure), ``timeout`` (should
+not happen on the smoke cohort since the plan is shortest-``travel_time``;
+included for completeness), ``no_route`` (no path in the full graph —
+pathological). ``replan_count`` is always 0.
+
+**Why this is in the harness.** Fills the "hazard-aware weights +
+block-blind" cell of the 2×2 capability matrix left empty by the prior
+tiering. Together with §5.2b (Blind), §5.1 (Replan), and §5.3 (HA):
+
+| Runner | Hazard-aware weights? | Block-aware? |
+|---|---|---|
+| ``NNA-Dijkstra-Blind`` | No (`base_time`) | No — fail on block |
+| ``NNA-Dijkstra`` | No (`base_time`) | Yes — reactive replan |
+| **``NNA-Dijkstra-HA-Blind`` (new)** | **Yes (`travel_time`)** | **No — fail on block** |
+| ``NNA-Dijkstra-HA`` | Yes (`travel_time`) | Yes — plans on passable subgraph |
+
+The gap ``Blind → HA-Blind`` isolates *what hazard-aware weighting alone
+buys you* when block foresight is absent. The gap ``HA-Blind → HA``
+isolates *what block foresight buys you on top of hazard-aware weights*.
+Together they decompose the single ``Blind → HA`` jump into
+interpretable halves — and the ordering is no longer a 1D ladder, it's
+a 2D capability matrix (see §7).
+
+**Mid-RI dominance hypothesis (falsifiable).** HA-Blind should strictly
+dominate Blind on success rate at **mid-RI (RI2–RI4)**, where blocks
+are numerous enough to matter but the passable SCC is still rich.
+Hazard-aware weights push the planner off high-λ edges, and high-λ
+edges (high hazard scores) are *also* the ones most likely to be
+blocked under the thresholded block rule, so HA-Blind incidentally
+avoids many blocks without knowing they exist.
+
+At the tails the gap narrows:
+
+- **RI1**: near-zero blocks → both variants near 100% success;
+  HA-Blind may pay a small ``travel_time`` premium for unproductive
+  detours.
+- **RI5**: most edges blocked → the subgraph collapses to a small
+  SCC; scenarios reduce to short trips with few block opportunities,
+  so Blind and HA-Blind converge.
+
+On the `la_trinidad_mini` cohort this hypothesis holds:
+`NNA-Dijkstra-Blind` vs `NNA-Dijkstra-HA-Blind` success rate is
+100/100 at RI1, **25/40 at RI2** (+15pp), **85/90 at RI3** (+5pp),
+**95/100 at RI4** (+5pp), 100/100 at RI5 — overall 81% → 86%. See
+`docs/blind_nna_and_new_metrics_guide.md` for the full results
+transcript.
+
+Uniform dominance across RI would signal either a bug or a
+misunderstanding of the block-rule/weighting alignment — the block
+rule is discrete (``H_f ≥ θ_f(RI)``) while λ drag is continuous
+(``1 + α_f·H_f + α_l·H_l``), so HA-Blind's incidental block-avoidance
+works only where high-λ and high-block-probability overlap.
+
+Implementation: `runners/nna_ha_blind.py`, shared execution in
+`runners/base.py::run_nna_blind` (reused — the new ``plan_graph``
+parameter lets the runner swap in ``view.hazard_aware_full_graph``
+instead of ``view.base_graph``).
+
 ### 5.4 DQN (algorithm_ids: `DQN@balanced_HF`, `DQN@fast_HF`, `DQN@safe_HF`)  — **implemented**
 
 Three runners, one per reward-profile variant. Each runner is a thin
@@ -528,16 +613,22 @@ comparison.
 **Information gradient (who knows what, when):**
 
 ```
-                   |  Sees base graph  | Sees blocked edges       | Sees activated travel_time |
-NNA-*-Blind        |  ✓                |  ✗ (never — fails)       |  ✗                         |
-NNA-Dijkstra       |  ✓                |  ✗ (until traverse)      |  ✗                         |
-NNA-A*             |  ✓                |  ✗ (until traverse)      |  ✗                         |
-DQN                |  ✓ (via state)    |  local only (mask)       |  ✗                         |
-NNA-Dijkstra-HA    |  ✓                |  ✓ (entire set)          |  ✓ (entire map)            |
+                       |  Sees base graph  | Sees blocked edges       | Sees activated travel_time |
+NNA-*-Blind            |  ✓                |  ✗ (never — fails)       |  ✗                         |
+NNA-Dijkstra           |  ✓                |  ✗ (until traverse)      |  ✗                         |
+NNA-A*                 |  ✓                |  ✗ (until traverse)      |  ✗                         |
+NNA-Dijkstra-HA-Blind  |  ✓                |  ✗ (never — fails)       |  ✓ at plan (full graph)    |
+DQN                    |  ✓ (via state)    |  local only (mask)       |  ✗                         |
+NNA-Dijkstra-HA        |  ✓                |  ✓ (entire set)          |  ✓ (entire map, passable)  |
 ```
 
-That ordering — blind NNAs < hazard-blind replan NNAs ≤ DQN < NNA-HA
-oracle — is the story the thesis tells.
+Note that this is no longer a strict 1D ladder. `HA-Blind` knows the
+hazard-weighted travel times (same as the oracle) but is block-blind
+(like the plain Blind variants); meanwhile `NNA-Dijkstra` (replan)
+knows nothing about hazards but can react to blocks. Neither strictly
+dominates the other — their relative performance at a given RI depends
+on which capability matters more. The story the thesis tells is now a
+2D decomposition (see §7): hazard-awareness × block-foresight.
 
 ---
 
@@ -854,6 +945,42 @@ Residual asymmetries we deliberately accept:
 The harness eliminates unintentional asymmetries. The remaining ones are
 the intentional experimental variables.
 
+### 7.1 The 2D capability matrix (post-HA-Blind)
+
+Prior to §5.3b, the classical NNA runners formed a 1D ladder: Blind <
+Replan < HA oracle. Adding `NNA-Dijkstra-HA-Blind` turns that ladder
+into a 2D matrix along two orthogonal capabilities:
+
+|                        | **Block-blind** (fail on block) | **Block-aware** (replan or exclude) |
+|---|---|---|
+| **Hazard-blind** (`base_time` weights) | `NNA-Dijkstra-Blind` | `NNA-Dijkstra` (fair replan) |
+| **Hazard-aware** (`travel_time` weights) | `NNA-Dijkstra-HA-Blind` | `NNA-Dijkstra-HA` (oracle) |
+
+Reading the matrix gives two direct ablation claims:
+
+- **Value of hazard-aware weighting** (in isolation from block
+  foresight) = `HA-Blind` − `Blind`. Isolates the effect of the λ-drag
+  reward shaping on planner behavior when the policy still commits to
+  its plan and fails on blocks.
+- **Value of block foresight** (on top of hazard-aware weights) =
+  `HA` − `HA-Blind`. Isolates the effect of pre-excluding blocked
+  edges from the planning substrate.
+
+These two gaps sum to the original `Blind → HA` jump but are
+individually interpretable. The matrix also shows why `NNA-Dijkstra`
+(fair replan) and `NNA-Dijkstra-HA-Blind` cannot be ranked globally:
+they trade block foresight for hazard-aware weighting, and which one
+wins depends on the RI regime and graph topology.
+
+The DQN's position in the matrix is **hazard-aware (via state
+features) × partial block-foresight (via the action mask at each
+step)**. It sits between Replan and HA on the block-foresight axis
+(per-step local awareness rather than scenario-wide pre-exclusion),
+and is hazard-aware in its policy (learned from state features plus
+training reward). Its fair comparators are `NNA-Dijkstra` and
+`NNA-Dijkstra-HA-Blind` — both have one of the two capabilities the
+DQN combines.
+
 ---
 
 ## 8. Sample end-to-end run (traceable output — legacy, pre-α-fix)
@@ -1024,10 +1151,15 @@ harness or an unexpected graph property — investigate.
    shared execution helpers with a different `path_fn`:
    - `run_nna_with_fair_replan` — plan-blind, repair on block (see
      `runners/nna.py` and `runners/nna_astar.py` for examples).
-   - `run_nna_blind` — plan-blind, fail on block (see `runners/nna_blind.py`
-     and `runners/nna_astar_blind.py` for examples).
-   For a hazard-aware variant, follow `runners/nna_ha.py` which operates
-   directly on `view.activated_graph` without a helper.
+   - `run_nna_blind` — plan once, fail on block (see `runners/nna_blind.py`
+     and `runners/nna_astar_blind.py` for the hazard-blind flavor, and
+     `runners/nna_ha_blind.py` for a hazard-aware-weight-but-block-blind
+     flavor). For hazard-aware-weight variants, pass
+     `plan_graph=view.hazard_aware_full_graph` and `plan_on="travel_time"`
+     — the same helper handles the blocked-set check at traversal time.
+   For a block-aware hazard-aware variant (true oracle), follow
+   `runners/nna_ha.py` which operates directly on `view.activated_graph`
+   without a helper.
 2. Register in `POLICY_FACTORIES` in `run_policies.py`.
 3. Invoke via `--algorithms <name>`.
 

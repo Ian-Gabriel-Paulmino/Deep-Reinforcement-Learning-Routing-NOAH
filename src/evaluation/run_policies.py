@@ -25,6 +25,7 @@ from .runners.nna_astar import NNAAStar
 from .runners.nna_astar_blind import NNAAStarBlind
 from .runners.nna_blind import NNADijkstraBlind
 from .runners.nna_ha import NNADijkstraHA
+from .runners.nna_ha_blind import NNADijkstraHABlind
 from .scenario_generator import load_graph
 from .schemas import read_cohort, read_scenarios, write_jsonl
 
@@ -61,6 +62,7 @@ POLICY_FACTORIES = {
     "NNA-Dijkstra-Blind": lambda: NNADijkstraBlind(),
     "NNA-AStar-Blind": lambda: NNAAStarBlind(),
     "NNA-Dijkstra-HA": lambda: NNADijkstraHA(),
+    "NNA-Dijkstra-HA-Blind": lambda: NNADijkstraHABlind(),
     "DQN@balanced_HF": lambda: _make_dqn_runner("balanced_HF"),
     "DQN@fast_HF": lambda: _make_dqn_runner("fast_HF"),
     "DQN@safe_HF": lambda: _make_dqn_runner("safe_HF"),

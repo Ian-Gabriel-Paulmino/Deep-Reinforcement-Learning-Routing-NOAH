@@ -331,10 +331,10 @@ $PY -m src.evaluation.run_policies \
     --cohort-dir src/evaluation/cohorts/la_trinidad_mini \
     --algorithms NNA-Dijkstra NNA-AStar \
                  NNA-Dijkstra-Blind NNA-AStar-Blind \
-                 NNA-Dijkstra-HA
+                 NNA-Dijkstra-HA NNA-Dijkstra-HA-Blind
 ```
 
-**Expected wall-clock:** ~2.5s on 100 scenarios (all five NNAs combined).
+**Expected wall-clock:** ~3.5s on 100 scenarios (all six NNAs combined).
 
 **Expected output (stdout):**
 
@@ -346,15 +346,20 @@ $PY -m src.evaluation.run_policies \
 17:26:27  INFO       NNA-AStar: 100 routes in 0.46s -> .../routes/NNA-AStar.jsonl
 17:26:27  INFO     Running NNA-Dijkstra-HA (sha256:36e98801ee83d548)
 17:26:28  INFO       NNA-Dijkstra-HA: 100 routes in 0.67s -> .../routes/NNA-Dijkstra-HA.jsonl
+17:26:28  INFO     Running NNA-Dijkstra-HA-Blind (sha256:2185abbcd5b93134)
+17:26:29  INFO       NNA-Dijkstra-HA-Blind: 100 routes in 0.86s -> .../routes/NNA-Dijkstra-HA-Blind.jsonl
 ```
 
 **Expected files:**
 
 ```
 src/evaluation/cohorts/la_trinidad_mini/routes/
-├── NNA-Dijkstra.jsonl         (100 lines, one route each, ~1 MB)
-├── NNA-AStar.jsonl            (~1 MB)
-└── NNA-Dijkstra-HA.jsonl      (~1 MB)
+├── NNA-Dijkstra.jsonl             (100 lines, one route each, ~1 MB)
+├── NNA-AStar.jsonl                (~1 MB)
+├── NNA-Dijkstra-Blind.jsonl       (~1 MB)
+├── NNA-AStar-Blind.jsonl          (~1 MB)
+├── NNA-Dijkstra-HA.jsonl          (~1 MB)
+└── NNA-Dijkstra-HA-Blind.jsonl    (~1 MB)
 ```
 
 ### 4.2 Single DQN profile (iterative dev)
@@ -381,7 +386,7 @@ up to 5 checkpoints, ~0.6s each).
 17:43:28  INFO       DQN@balanced_HF: 100 routes in 3.28s -> .../routes/DQN@balanced_HF.jsonl
 ```
 
-### 4.3 Full 8-method comparison (the thesis run)
+### 4.3 Full 9-method comparison (the thesis run)
 
 **Purpose:** produce the complete route set for the manuscript's
 comparison tables.
@@ -391,11 +396,11 @@ $PY -m src.evaluation.run_policies \
     --cohort-dir src/evaluation/cohorts/la_trinidad_mini \
     --algorithms NNA-Dijkstra NNA-AStar \
                   NNA-Dijkstra-Blind NNA-AStar-Blind \
-                  NNA-Dijkstra-HA \
+                  NNA-Dijkstra-HA NNA-Dijkstra-HA-Blind \
                   DQN@balanced_HF DQN@fast_HF DQN@safe_HF
 ```
 
-**Expected wall-clock on la_trinidad_mini (100 scenarios):** ~14s total.
+**Expected wall-clock on la_trinidad_mini (100 scenarios):** ~15s total.
 On `la_trinidad_v1` (2500 scenarios full graph): ~6–10 minutes (DQN
 dominates; each DQN profile takes ~2 minutes at 2500 scenarios).
 
@@ -410,7 +415,8 @@ src/evaluation/cohorts/la_trinidad_mini/routes/
 ├── NNA-AStar-Blind.jsonl
 ├── NNA-Dijkstra.jsonl
 ├── NNA-Dijkstra-Blind.jsonl
-└── NNA-Dijkstra-HA.jsonl
+├── NNA-Dijkstra-HA.jsonl
+└── NNA-Dijkstra-HA-Blind.jsonl
 ```
 
 ### 4.4 Re-run only a specific algorithm
@@ -496,9 +502,9 @@ Mode:   deterministic_v3
 
 ```
 src/evaluation/cohorts/la_trinidad_mini/report/
-├── metrics.json           (~60 KB; 8 algos × 7 metrics × 6 buckets + robustness)
-├── raw_metrics.csv        (800 rows; one per (scenario, algorithm))
-└── overall_metrics.csv    (48 rows;  one per (algorithm, RI|all))
+├── metrics.json           (~70 KB; 9 algos × 7 metrics × 6 buckets + robustness)
+├── raw_metrics.csv        (900 rows; one per (scenario, algorithm))
+└── overall_metrics.csv    (54 rows;  one per (algorithm, RI|all))
 ```
 
 `raw_metrics.csv` and `overall_metrics.csv` both contain the same numbers
@@ -614,31 +620,35 @@ Run these after every major change. Catches most regressions.
   - On `success=true`: `visit_order` covers all `delivery_nodes`.
   - On `success=false`: `failure_reason` is one of `trapped, timeout,
     invalid_action, no_route, blocked`. `blocked` only appears from
-    the blind variants (`NNA-Dijkstra-Blind`, `NNA-AStar-Blind`).
+    the block-blind variants (`NNA-Dijkstra-Blind`, `NNA-AStar-Blind`,
+    `NNA-Dijkstra-HA-Blind`).
 - [ ] NNA-Dijkstra and NNA-AStar should produce **identical** metrics
       on cohorts without block-replan activity — A*'s admissible
       heuristic finds the same shortest paths as Dijkstra.
 - [ ] NNA-Dijkstra-Blind and NNA-AStar-Blind should also produce
       **identical** metrics to each other on every cohort (same shortest
       paths, no replan, no randomness).
+- [ ] NNA-Dijkstra-HA-Blind's `failure_reason` must be in
+      `{None, "blocked", "timeout"}` (never `"trapped"` — the helper
+      never calls the replan path).
 - [ ] NNA-Dijkstra-HA's `replan_count` should be 0 everywhere (oracle
       doesn't replan).
-- [ ] Blind NNAs' `replan_count` should be 0 everywhere (no replan
-      mechanism).
+- [ ] Blind NNAs' (including HA-Blind) `replan_count` should be 0
+      everywhere (no replan mechanism).
 - [ ] DQN runners' `replan_count` should be 0 everywhere (action mask,
       not replan).
 
 ### 6.3 After Stage 3
 
-- [ ] 8 entries under `report["algorithms"]` for the full thesis run.
+- [ ] 9 entries under `report["algorithms"]` for the full thesis run.
 - [ ] Each algorithm has `metrics` keys: `success, travel_time,
       hazard_exposure, hazard_score, steps, distance, runtime`. Each has
       `all` + 5 RI keys.
 - [ ] `robustness` dict has 7 numbers (one per metric). `success`
       robustness near 1.0 for algorithms with 100% success at every RI.
 - [ ] CSV files present in `report/`:
-  - `raw_metrics.csv` has `8 × num_scenarios` rows (plus header).
-  - `overall_metrics.csv` has `8 × 6 = 48` rows (plus header).
+  - `raw_metrics.csv` has `9 × num_scenarios` rows (plus header).
+  - `overall_metrics.csv` has `9 × 6 = 54` rows (plus header).
 - [ ] Ordering check (on the full canonical cohort — small subgraph
       can invert due to SCC collapse):
   - `NNA-Dijkstra-HA.travel_time.mean ≤ DQN.travel_time.mean ≤
@@ -646,10 +656,19 @@ Run these after every major change. Catches most regressions.
   - `NNA-Dijkstra-Blind.success_rate ≤ NNA-Dijkstra.success_rate` at
     every RI (blind is a strict subset of replan — no mechanism to
     recover from a block).
+  - `NNA-Dijkstra-Blind.success_rate ≤ NNA-Dijkstra-HA-Blind.success_rate
+    ≤ NNA-Dijkstra-HA.success_rate` at every RI (hazard-aware weights
+    add incidental block-avoidance; oracle still dominates). The biggest
+    Blind → HA-Blind lift is expected at RI2–RI4 (mid-RI payoff regime);
+    RI1 and RI5 tails can be tied because of low block rate or SCC
+    collapse respectively. Uniform dominance across all RI is a bug
+    signal.
   - `DQN.hazard_exposure.mean < NNA-Dijkstra.hazard_exposure.mean` at
     RI≥3 (DQN should avoid hazardous edges; baselines are hazard-blind).
-- [ ] Blind-NNA `failure_counts["blocked"]` is non-zero at any RI with
-      blocked edges. Zero blocked failures at RI2+ is a bug signal.
+- [ ] Block-blind NNA `failure_counts["blocked"]` is non-zero at any RI
+      with blocked edges (applies to `NNA-Dijkstra-Blind`,
+      `NNA-AStar-Blind`, and `NNA-Dijkstra-HA-Blind`). Zero blocked
+      failures at RI2+ is a bug signal.
 - [ ] Success rates at RI1 are approximately in the ballpark of the
       per-profile reference CSV (`rl_profiles_200n_ri1_overall.csv` if
       you're on the n=200 subgraph — see the training run's artifacts).
@@ -674,10 +693,12 @@ $PY -m src.evaluation.scenario_generator \
     --cohort-id la_trinidad_v1 \
     --num-scenarios 2500 --num-deliveries 5 --master-seed 42 --max-steps 500
 
-# 2. Run all 6 methods
+# 2. Run all 7 methods (hazard-aware comparison; add -Blind variants
+#    from §7.x if you want the four-cell capability ablation)
 $PY -m src.evaluation.run_policies \
     --cohort-dir src/evaluation/cohorts/la_trinidad_v1 \
-    --algorithms NNA-Dijkstra NNA-AStar NNA-Dijkstra-HA \
+    --algorithms NNA-Dijkstra NNA-AStar \
+                  NNA-Dijkstra-HA NNA-Dijkstra-HA-Blind \
                   DQN@balanced_HF DQN@fast_HF DQN@safe_HF
 
 # 3. Evaluate
