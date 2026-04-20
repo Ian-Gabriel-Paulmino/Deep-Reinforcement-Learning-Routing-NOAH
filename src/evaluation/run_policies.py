@@ -22,6 +22,8 @@ from typing import Optional
 from .runners.base import build_graph_view
 from .runners.nna import NNADijkstra
 from .runners.nna_astar import NNAAStar
+from .runners.nna_astar_blind import NNAAStarBlind
+from .runners.nna_blind import NNADijkstraBlind
 from .runners.nna_ha import NNADijkstraHA
 from .scenario_generator import load_graph
 from .schemas import read_cohort, read_scenarios, write_jsonl
@@ -56,6 +58,8 @@ def _make_dqn_runner(profile: str):
 POLICY_FACTORIES = {
     "NNA-Dijkstra": lambda: NNADijkstra(),
     "NNA-AStar": lambda: NNAAStar(),
+    "NNA-Dijkstra-Blind": lambda: NNADijkstraBlind(),
+    "NNA-AStar-Blind": lambda: NNAAStarBlind(),
     "NNA-Dijkstra-HA": lambda: NNADijkstraHA(),
     "DQN@balanced_HF": lambda: _make_dqn_runner("balanced_HF"),
     "DQN@fast_HF": lambda: _make_dqn_runner("fast_HF"),

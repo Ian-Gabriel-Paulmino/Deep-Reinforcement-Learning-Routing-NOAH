@@ -51,12 +51,17 @@ Stage 1  scenario_generator.py  ─►  cohorts/<cohort_id>/cohort.json
 
 Stage 2  run_policies.py        ─►  cohorts/<cohort_id>/routes/<algorithm_id>.jsonl
          (one run per algorithm, all reading the same scenarios.jsonl.
-          Six algorithms registered today: NNA-Dijkstra, NNA-AStar,
-          NNA-Dijkstra-HA, DQN@balanced_HF, DQN@fast_HF, DQN@safe_HF.)
+          Eight algorithms registered today: NNA-Dijkstra, NNA-AStar,
+          NNA-Dijkstra-Blind, NNA-AStar-Blind, NNA-Dijkstra-HA,
+          DQN@balanced_HF, DQN@fast_HF, DQN@safe_HF.)
 
 Stage 3  evaluator.py           ─►  cohorts/<cohort_id>/report/metrics.json
+                                    cohorts/<cohort_id>/report/raw_metrics.csv
+                                    cohorts/<cohort_id>/report/overall_metrics.csv
          (reads all routes/*.jsonl; aggregates per (algorithm, RI);
-          computes robustness post-aggregation. PNGs + HTMLs in future work.)
+          computes robustness post-aggregation; emits one JSON +
+          two CSVs — raw per-episode and wide-format per (algo, RI).
+          PNGs + HTMLs in future work.)
 ```
 
 Each stage reads and writes plain JSONL. Adding a new DQN variant reruns
@@ -77,13 +82,15 @@ Benguet Flood and Landslide Data/src/evaluation/
 ├── experimental_setup_blueprint_e2e.md    <-- operational commands + verification
 ├── schemas.py                  Scenario, Route, Cohort, EdgeStep + JSONL I/O
 ├── scenario_generator.py       Stage 1 entry point
-├── run_policies.py             Stage 2 entry point (6 algorithms wired)
-├── evaluator.py                Stage 3 entry point (+ robustness post-agg)
+├── run_policies.py             Stage 2 entry point (8 algorithms wired)
+├── evaluator.py                Stage 3 entry point (+ robustness + CSV outputs)
 ├── runners/
 │   ├── __init__.py
-│   ├── base.py                 GraphView, Policy protocol, fair-replan loop
+│   ├── base.py                 GraphView, Policy protocol, fair-replan + blind loops
 │   ├── nna.py                  NNA-Dijkstra (fair replan)
 │   ├── nna_astar.py            NNA-AStar  (A* + fair replan)
+│   ├── nna_blind.py            NNA-Dijkstra-Blind (Dijkstra plan, NO replan)
+│   ├── nna_astar_blind.py      NNA-AStar-Blind    (A* plan, NO replan)
 │   ├── nna_ha.py               NNA-Dijkstra-HA (hazard-aware oracle)
 │   ├── _rl_backend.py          re-exports of the vendored RL backend
 │   └── dqn.py                  DQNRunner (per-profile, per-RI dispatch)
@@ -93,10 +100,14 @@ Benguet Flood and Landslide Data/src/evaluation/
 │   ├── rl_routing_wCUDA_wCheckP.py
 │   └── utils/graph_utils.py
 ├── metrics/
-│   ├── __init__.py             metric registry
+│   ├── __init__.py             metric registry (7 metrics)
 │   ├── success.py
 │   ├── travel_time.py
-│   ├── hazard_exposure.py      manuscript §3.6.1 C
+│   ├── hazard_exposure.py      manuscript §3.6.1 C — reward-weighted
+│   ├── hazard_score.py         raw, unweighted length × hazard sum
+│   ├── steps.py                edge traversal count
+│   ├── distance.py             meters walked
+│   ├── runtime.py              wall-clock ms (defined even on failure)
 │   └── robustness.py           post-aggregation only (not in REGISTRY)
 ├── configs/hazard_training_final/
 │   ├── balanced_HF/stage_200_balanced_HF_RI{1..5}_det.json
@@ -107,7 +118,10 @@ Benguet Flood and Landslide Data/src/evaluation/
         ├── cohort.json
         ├── scenarios.jsonl
         ├── routes/<algo_id>.jsonl   (one file per algorithm)
-        └── report/metrics.json
+        └── report/
+            ├── metrics.json         aggregated JSON (for machines)
+            ├── raw_metrics.csv      one row per (scenario, algo)
+            └── overall_metrics.csv  one row per (algo, RI|all); wide format
 ```
 
 Outside `src/evaluation/` but used at runtime:
@@ -186,7 +200,7 @@ The output of one algorithm on one scenario.
 | `edge_sequence` | `[[u, v], ...]` of every edge traversed. |
 | `per_edge` | Array of `EdgeStep` dicts — step index, was_replan flag, travel_time, hazard_flood, hazard_landslide, length_m. This is what the Stage-3 metrics read. |
 | `success` | Boolean. |
-| `failure_reason` | `null` on success; otherwise one of `trapped`, `timeout`, `invalid_action`, `no_route`. |
+| `failure_reason` | `null` on success; otherwise one of `trapped`, `timeout`, `invalid_action`, `no_route`, `blocked` (blind NNAs only — planned edge was in `blocked_edges`). |
 | `replan_count` | Number of times the policy had to locally repair its plan (see §5 below). |
 | `wall_time_ms` | Wall-clock time for this single scenario run. |
 | `policy_metadata` | Free-form dict for policy-specific context (e.g. checkpoint step, eval mode). |
@@ -234,13 +248,18 @@ Notes:
 ```bash
 python -m src.evaluation.run_policies \
     --cohort-dir src/evaluation/cohorts/la_trinidad_mini \
-    --algorithms NNA-Dijkstra NNA-AStar NNA-Dijkstra-HA \
+    --algorithms NNA-Dijkstra NNA-AStar \
+                  NNA-Dijkstra-Blind NNA-AStar-Blind \
+                  NNA-Dijkstra-HA \
                   DQN@balanced_HF DQN@fast_HF DQN@safe_HF
 ```
 
-Six algorithms are registered today in `POLICY_FACTORIES`
-(`run_policies.py`): `NNA-Dijkstra`, `NNA-AStar`, `NNA-Dijkstra-HA`,
-and three DQN profiles (`DQN@balanced_HF`, `DQN@fast_HF`,
+Eight algorithms are registered today in `POLICY_FACTORIES`
+(`run_policies.py`): the two replan-capable NNAs (`NNA-Dijkstra`,
+`NNA-AStar`), the two **blind** NNAs (`NNA-Dijkstra-Blind`,
+`NNA-AStar-Blind` — plan once, no replan, fail on first blocked
+edge; see §5.1b), the hazard-aware oracle (`NNA-Dijkstra-HA`), and
+three DQN profiles (`DQN@balanced_HF`, `DQN@fast_HF`,
 `DQN@safe_HF`). Each DQN runner internally dispatches to the
 RI-matched specialist checkpoint (see §5.4). Extension pattern:
 
@@ -262,8 +281,24 @@ python -m src.evaluation.evaluator --cohort-dir src/evaluation/cohorts/la_trinid
 ```
 
 Reads every `routes/*.jsonl` in the cohort, applies every metric in
-`metrics.REGISTRY`, aggregates by `(algorithm_id, RI)`, writes
-`report/metrics.json`, and prints a human summary.
+`metrics.REGISTRY`, aggregates by `(algorithm_id, RI)`, and writes
+three artifacts into `report/`:
+
+- `metrics.json` — nested JSON mirror of the aggregation, indent-2
+  formatted. Machine-readable.
+- `raw_metrics.csv` — one row per `(scenario_id, algorithm_id)`. Fixed
+  prefix columns (`scenario_id`, `RI`, `algorithm_id`, `failure_reason`,
+  `replan_count`) + one column per registered metric. Failed-episode
+  metric columns are blank (except `runtime`, which is always defined).
+  This is the file to load into pandas / Excel for ad-hoc analysis.
+- `overall_metrics.csv` — wide-format aggregated stats, one row per
+  `(algorithm_id, bucket)` where bucket ∈ `{RI1..RI5, "all"}`. For each
+  metric, four columns: `<metric>_mean`, `<metric>_stdev`, `<metric>_min`,
+  `<metric>_max`. Robustness columns are populated only on the
+  `bucket="all"` row; a `failure_counts` column carries `reason=N`
+  strings on the same row.
+
+Also prints a human summary to stdout.
 
 ---
 
@@ -336,6 +371,52 @@ asterisks are invalid in Windows filenames, and the id is used as the
 routes-file basename. Docs and presentations can still call it "NNA-A*".
 
 Implementation: `runners/nna_astar.py`.
+
+### 5.2b NNA-Dijkstra-Blind / NNA-AStar-Blind (hazard-blind, **no replan**)  — **implemented**
+
+Same hazard-blind planning as §5.1 and §5.2 (shortest `base_time` path on
+the full base graph, using Dijkstra or A* respectively). **The only
+difference: no fair-replan loop.** The policy commits to its planned path
+and the episode fails with `failure_reason = "blocked"` on the first
+blocked edge it attempts to cross.
+
+**What it sees at plan time:** the full base graph, hazard-blind. Same as
+the replan-capable variants.
+
+**What it sees at execution time:** nothing about blockages. Per-edge
+traversal proceeds along the plan until either (a) the plan is finished
+and every delivery is visited (success) or (b) the next edge is in
+`scenario.blocked_set()` (immediate failure — no local repair, no
+"walk around the block" search).
+
+**Failure modes:** `blocked` (the signature failure — plan crossed a
+blocked edge), `timeout` (shouldn't happen on the smoke cohort since the
+plan is shortest-`base_time`; included for completeness), `no_route` (no
+base-graph path from current to any unvisited delivery — pathological).
+`replan_count` is always 0.
+
+**Why this is in the harness.** Purpose is to establish a worst-case
+classical baseline ("fast but blind" — knows nothing about blockages at
+any stage) for the thesis comparison:
+
+1. **Blind** — this variant. No block awareness. Worst case.
+2. **Replan** — §5.1 / §5.2. Plan blind, repair on block. Fairness-safe
+   competitor to the DQN.
+3. **HA oracle** — §5.3. Plan with full foresight. Upper bound.
+
+The DQN sits between Replan and HA. Without the Blind variant, it was hard
+to answer *"how much does the replan loop help the classical baselines?"*
+— now the gap between Blind and Replan quantifies exactly that.
+
+**Identical stats between NNA-Dijkstra-Blind and NNA-AStar-Blind are
+expected.** A* with an admissible heuristic on `base_time` finds the same
+shortest paths as Dijkstra, and since neither does any local repair,
+their realized routes are identical on every scenario. The two algorithms
+stay distinct in the registry so the planning-cost contrast (A* heuristic
+vs. Dijkstra sweep) can be measured via the `runtime` metric.
+
+Implementation: `runners/nna_blind.py`, `runners/nna_astar_blind.py`,
+shared execution in `runners/base.py::run_nna_blind`.
 
 ### 5.3 NNA-Dijkstra-HA (hazard-aware oracle)  — **implemented**
 
@@ -447,15 +528,16 @@ comparison.
 **Information gradient (who knows what, when):**
 
 ```
-                   |  Sees base graph  | Sees blocked edges  | Sees activated travel_time |
-NNA-Dijkstra       |  ✓                |  ✗ (until traverse) |  ✗                         |
-NNA-A*             |  ✓                |  ✗ (until traverse) |  ✗                         |
-DQN                |  ✓ (via state)    |  local only (mask)  |  ✗                         |
-NNA-Dijkstra-HA    |  ✓                |  ✓ (entire set)     |  ✓ (entire map)            |
+                   |  Sees base graph  | Sees blocked edges       | Sees activated travel_time |
+NNA-*-Blind        |  ✓                |  ✗ (never — fails)       |  ✗                         |
+NNA-Dijkstra       |  ✓                |  ✗ (until traverse)      |  ✗                         |
+NNA-A*             |  ✓                |  ✗ (until traverse)      |  ✗                         |
+DQN                |  ✓ (via state)    |  local only (mask)       |  ✗                         |
+NNA-Dijkstra-HA    |  ✓                |  ✓ (entire set)          |  ✓ (entire map)            |
 ```
 
-That ordering — hazard-blind NNAs < DQN < NNA-HA oracle — is the story
-the thesis tells.
+That ordering — blind NNAs < hazard-blind replan NNAs ≤ DQN < NNA-HA
+oracle — is the story the thesis tells.
 
 ---
 
@@ -663,7 +745,73 @@ Guard: returns `None` if fewer than two RI means are available or if
 "metric wasn't applicable on enough RIs to judge" rather than "policy
 is not robust."
 
-#### 6.4.5 Replan count (currently reported as diagnostic, not a metric)
+#### 6.4.5 Hazard score — raw unweighted exposure (`metrics/hazard_score.py`)
+
+```
+   hazard_score(R) = Σ_{e ∈ R} (H_f,e + H_l,e) · L_e   if success
+                   = NaN                                if failed
+```
+
+Companion to `hazard_exposure` (§6.4.3) that **drops the reward weights
+w_f, w_l**. Interpretation: "how many meters × score units of hazard did
+the policy traverse, treating flood and landslide equally?"
+
+The two metrics answer complementary questions:
+
+- `hazard_exposure` — "policy-weighted safety cost" (aligned with the
+  DQN's training reward penalty; use this when comparing policies on the
+  axis they were trained on).
+- `hazard_score` — "raw physical exposure" (independent of reward
+  calibration; use this when debating "what if we retrained with
+  different weights?" or for sensitivity analysis).
+
+For a 100 m worst-case edge (H_f = H_l = 1), `hazard_exposure` contributes
+`(0.6 + 0.4) · 100 = 100` whereas `hazard_score` contributes
+`(1 + 1) · 100 = 200`. So absolute magnitudes differ even though the
+per-algorithm *ordering* is usually the same.
+
+#### 6.4.6 Steps — edge-traversal count (`metrics/steps.py`)
+
+```
+   steps(R) = len(R.per_edge)   if success
+            = NaN                if failed
+```
+
+Counts every edge walked, including those added by NNA replans. Smaller
+≠ better (the hazard-blind NNA often finds the shortest path in step-
+count because it ignores safety detours); use in conjunction with
+`distance` and `travel_time` to characterize path shape.
+
+#### 6.4.7 Distance — meters walked (`metrics/distance.py`)
+
+```
+   distance(R) = Σ_{e ∈ R} e.length_m   if success
+               = NaN                     if failed
+```
+
+Physical distance traversed — reflects what the policy *actually* walked,
+not what it planned. For the replan-capable NNAs this can exceed the
+shortest-path distance by the detours taken during replan.
+
+#### 6.4.8 Runtime — wall-clock ms per episode (`metrics/runtime.py`)
+
+```
+   runtime(R) = R.wall_time_ms   (always defined, success or failure)
+```
+
+Thin re-export of `Route.wall_time_ms` as a registered metric so it
+participates in the standard aggregation + CSV pipelines. Unlike
+`travel_time` / `hazard_exposure` / `steps` / `distance`, this is
+meaningful even on failed episodes — e.g., "how long did the blind NNA
+spend planning + walking before hitting a block?" — which is why it has
+no NaN-on-failure guard.
+
+Computational cost per policy is dominated by graph algorithms (Dijkstra /
+A*) for NNAs and forward passes through a small MLP for DQN. NNA
+runtimes live in the 1–10 ms range per scenario; DQN is closer to 20–80
+ms per scenario (model load dominates on the first scenario per RI).
+
+#### 6.4.9 Replan count (currently reported as diagnostic, not a metric)
 
 Not a "metric" in the thesis sense, but the evaluator surfaces
 `mean replan_count` per algorithm. High numbers at high RI mean the
@@ -671,6 +819,9 @@ NNA's hazard-blind plan is repeatedly in conflict with actual blocks — a
 direct measure of how much work the fair-replan protocol is doing on the
 NNA's behalf. If this number is close to zero, the fairness fix is
 minimally affecting outcomes; if it's large, the fix is load-bearing.
+
+`replan_count` is always 0 for blind NNAs, DQN, and NNA-HA by
+construction — those policies don't use the replan mechanism.
 
 ---
 
@@ -869,8 +1020,14 @@ harness or an unexpected graph property — investigate.
 ### 9.1 Add a new baseline algorithm
 
 1. Create `runners/<name>.py` with a dataclass implementing the `Policy`
-   protocol from `runners/base.py`. Typically you just wrap
-   `run_nna_with_fair_replan` with a different `path_fn`.
+   protocol from `runners/base.py`. Typically you just wrap one of the
+   shared execution helpers with a different `path_fn`:
+   - `run_nna_with_fair_replan` — plan-blind, repair on block (see
+     `runners/nna.py` and `runners/nna_astar.py` for examples).
+   - `run_nna_blind` — plan-blind, fail on block (see `runners/nna_blind.py`
+     and `runners/nna_astar_blind.py` for examples).
+   For a hazard-aware variant, follow `runners/nna_ha.py` which operates
+   directly on `view.activated_graph` without a helper.
 2. Register in `POLICY_FACTORIES` in `run_policies.py`.
 3. Invoke via `--algorithms <name>`.
 

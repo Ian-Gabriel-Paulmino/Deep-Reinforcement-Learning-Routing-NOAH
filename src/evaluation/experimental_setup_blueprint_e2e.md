@@ -329,10 +329,12 @@ robustness metric, or the evaluator.
 ```bash
 $PY -m src.evaluation.run_policies \
     --cohort-dir src/evaluation/cohorts/la_trinidad_mini \
-    --algorithms NNA-Dijkstra NNA-AStar NNA-Dijkstra-HA
+    --algorithms NNA-Dijkstra NNA-AStar \
+                 NNA-Dijkstra-Blind NNA-AStar-Blind \
+                 NNA-Dijkstra-HA
 ```
 
-**Expected wall-clock:** ~1.5s on 100 scenarios (all three algos combined).
+**Expected wall-clock:** ~2.5s on 100 scenarios (all five NNAs combined).
 
 **Expected output (stdout):**
 
@@ -379,7 +381,7 @@ up to 5 checkpoints, ~0.6s each).
 17:43:28  INFO       DQN@balanced_HF: 100 routes in 3.28s -> .../routes/DQN@balanced_HF.jsonl
 ```
 
-### 4.3 Full 6-method comparison (the thesis run)
+### 4.3 Full 8-method comparison (the thesis run)
 
 **Purpose:** produce the complete route set for the manuscript's
 comparison tables.
@@ -387,11 +389,13 @@ comparison tables.
 ```bash
 $PY -m src.evaluation.run_policies \
     --cohort-dir src/evaluation/cohorts/la_trinidad_mini \
-    --algorithms NNA-Dijkstra NNA-AStar NNA-Dijkstra-HA \
+    --algorithms NNA-Dijkstra NNA-AStar \
+                  NNA-Dijkstra-Blind NNA-AStar-Blind \
+                  NNA-Dijkstra-HA \
                   DQN@balanced_HF DQN@fast_HF DQN@safe_HF
 ```
 
-**Expected wall-clock on la_trinidad_mini (100 scenarios):** ~13s total.
+**Expected wall-clock on la_trinidad_mini (100 scenarios):** ~14s total.
 On `la_trinidad_v1` (2500 scenarios full graph): ~6–10 minutes (DQN
 dominates; each DQN profile takes ~2 minutes at 2500 scenarios).
 
@@ -403,7 +407,9 @@ src/evaluation/cohorts/la_trinidad_mini/routes/
 ├── DQN@fast_HF.jsonl
 ├── DQN@safe_HF.jsonl
 ├── NNA-AStar.jsonl
+├── NNA-AStar-Blind.jsonl
 ├── NNA-Dijkstra.jsonl
+├── NNA-Dijkstra-Blind.jsonl
 └── NNA-Dijkstra-HA.jsonl
 ```
 
@@ -442,14 +448,15 @@ done
 
 ### 5.1 Full evaluation
 
-**Purpose:** produce the report JSON + console summary after Stage 2.
+**Purpose:** produce the report JSON, two CSV files, and the console
+summary after Stage 2.
 
 ```bash
 $PY -m src.evaluation.evaluator \
     --cohort-dir src/evaluation/cohorts/la_trinidad_mini
 ```
 
-**Expected wall-clock:** <1 second on 600 total routes (100 × 6 algos).
+**Expected wall-clock:** <1 second on 800 total routes (100 × 8 algos).
 
 **Expected console summary (abbreviated — from the smoke test in this
 session):**
@@ -489,8 +496,15 @@ Mode:   deterministic_v3
 
 ```
 src/evaluation/cohorts/la_trinidad_mini/report/
-└── metrics.json    (~30 KB, full per-(algorithm, RI) aggregates)
+├── metrics.json           (~60 KB; 8 algos × 7 metrics × 6 buckets + robustness)
+├── raw_metrics.csv        (800 rows; one per (scenario, algorithm))
+└── overall_metrics.csv    (48 rows;  one per (algorithm, RI|all))
 ```
+
+`raw_metrics.csv` and `overall_metrics.csv` both contain the same numbers
+as `metrics.json` but in spreadsheet-friendly wide format. The raw CSV is
+what you load into pandas/Excel for ad-hoc analysis; the overall CSV is
+what you paste into the thesis comparison tables.
 
 ### 5.2 Metric-only rerun (add a new metric, skip policies)
 
@@ -527,12 +541,16 @@ Stage 3 reads `routes/*.jsonl` as-is. New metric appears in
       "metrics": {
         "success":         {"all": {...}, "RI1": {...}, ...},
         "travel_time":     {"all": {...}, "RI1": {...}, ...},
-        "hazard_exposure": {"all": {...}, "RI1": {...}, ...}
+        "hazard_exposure": {"all": {...}, "RI1": {...}, ...},
+        "hazard_score":    {"all": {...}, "RI1": {...}, ...},
+        "steps":           {"all": {...}, "RI1": {...}, ...},
+        "distance":        {"all": {...}, "RI1": {...}, ...},
+        "runtime":         {"all": {...}, "RI1": {...}, ...}
       },
       "robustness": {
-        "success": 0.915,
-        "travel_time": 0.609,
-        "hazard_exposure": 0.282
+        "success": 0.915, "travel_time": 0.609, "hazard_exposure": 0.282,
+        "hazard_score": 0.301, "steps": 0.573, "distance": 0.446,
+        "runtime": 0.531
       }
     },
     "NNA-Dijkstra": {...},
@@ -543,6 +561,20 @@ Stage 3 reads `routes/*.jsonl` as-is. New metric appears in
 
 Each `_safe_stats` entry has keys: `n, mean, stdev, min, max`. NaN values
 filtered out of aggregates.
+
+The **CSV mirrors** are generated from the same aggregate data:
+
+- `raw_metrics.csv` columns:
+  `scenario_id, RI, algorithm_id, failure_reason, replan_count,`
+  `success, travel_time, hazard_exposure, hazard_score, steps, distance, runtime`.
+  Failed-episode metric cells are blank (except `runtime`, which is
+  always defined). The CSV has one row per `(scenario, algo)` pair —
+  expect `num_scenarios × num_algorithms` rows.
+- `overall_metrics.csv` columns: fixed `(algorithm_id, bucket, n)` +
+  `<metric>_{mean,stdev,min,max}` per metric +
+  `robustness_<metric>` per metric + `failure_counts`. Robustness and
+  failure-counts cells are blank for non-`all` buckets. Expect
+  `num_algorithms × 6` rows (5 RI buckets + `all`).
 
 ---
 
@@ -581,28 +613,43 @@ Run these after every major change. Catches most regressions.
   - `visit_order` is a subset of `scenario.delivery_nodes`.
   - On `success=true`: `visit_order` covers all `delivery_nodes`.
   - On `success=false`: `failure_reason` is one of `trapped, timeout,
-    invalid_action, no_route`.
+    invalid_action, no_route, blocked`. `blocked` only appears from
+    the blind variants (`NNA-Dijkstra-Blind`, `NNA-AStar-Blind`).
 - [ ] NNA-Dijkstra and NNA-AStar should produce **identical** metrics
       on cohorts without block-replan activity — A*'s admissible
       heuristic finds the same shortest paths as Dijkstra.
+- [ ] NNA-Dijkstra-Blind and NNA-AStar-Blind should also produce
+      **identical** metrics to each other on every cohort (same shortest
+      paths, no replan, no randomness).
 - [ ] NNA-Dijkstra-HA's `replan_count` should be 0 everywhere (oracle
       doesn't replan).
+- [ ] Blind NNAs' `replan_count` should be 0 everywhere (no replan
+      mechanism).
 - [ ] DQN runners' `replan_count` should be 0 everywhere (action mask,
       not replan).
 
 ### 6.3 After Stage 3
 
-- [ ] 6 entries under `report["algorithms"]` for the full thesis run.
+- [ ] 8 entries under `report["algorithms"]` for the full thesis run.
 - [ ] Each algorithm has `metrics` keys: `success, travel_time,
-      hazard_exposure`. Each has `all` + 5 RI keys.
-- [ ] `robustness` dict has 3 numbers (one per metric). `success`
+      hazard_exposure, hazard_score, steps, distance, runtime`. Each has
+      `all` + 5 RI keys.
+- [ ] `robustness` dict has 7 numbers (one per metric). `success`
       robustness near 1.0 for algorithms with 100% success at every RI.
+- [ ] CSV files present in `report/`:
+  - `raw_metrics.csv` has `8 × num_scenarios` rows (plus header).
+  - `overall_metrics.csv` has `8 × 6 = 48` rows (plus header).
 - [ ] Ordering check (on the full canonical cohort — small subgraph
       can invert due to SCC collapse):
   - `NNA-Dijkstra-HA.travel_time.mean ≤ DQN.travel_time.mean ≤
     NNA-Dijkstra.travel_time.mean` (oracle lower bound).
+  - `NNA-Dijkstra-Blind.success_rate ≤ NNA-Dijkstra.success_rate` at
+    every RI (blind is a strict subset of replan — no mechanism to
+    recover from a block).
   - `DQN.hazard_exposure.mean < NNA-Dijkstra.hazard_exposure.mean` at
     RI≥3 (DQN should avoid hazardous edges; baselines are hazard-blind).
+- [ ] Blind-NNA `failure_counts["blocked"]` is non-zero at any RI with
+      blocked edges. Zero blocked failures at RI2+ is a bug signal.
 - [ ] Success rates at RI1 are approximately in the ballpark of the
       per-profile reference CSV (`rl_profiles_200n_ri1_overall.csv` if
       you're on the n=200 subgraph — see the training run's artifacts).

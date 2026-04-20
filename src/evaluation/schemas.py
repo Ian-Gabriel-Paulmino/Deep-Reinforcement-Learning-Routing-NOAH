@@ -124,9 +124,10 @@ class EdgeStep:
 # Failure reason vocabulary shared by all policies (see plan §Locked design
 # decisions, item 5). ``invalid_action`` is a bug signal — a well-behaved
 # policy should never produce it because blocked edges are filtered from the
-# valid action set.
+# valid action set. ``blocked`` is specific to the blind-NNA variants which
+# commit to a planned path and fail on first blocked-edge encounter.
 FAILURE_REASONS = frozenset(
-    {"trapped", "timeout", "invalid_action", "no_route"}
+    {"trapped", "timeout", "invalid_action", "no_route", "blocked"}
 )
 
 

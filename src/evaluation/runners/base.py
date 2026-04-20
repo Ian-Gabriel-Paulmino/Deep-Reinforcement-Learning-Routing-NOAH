@@ -268,3 +268,123 @@ def run_nna_with_fair_replan(
         wall_time_ms=wall_ms,
         policy_metadata=dict(policy_metadata),
     )
+
+
+def run_nna_blind(
+    *,
+    scenario: Scenario,
+    view: GraphView,
+    algorithm_id: str,
+    algorithm_config_hash: str,
+    path_fn,
+    plan_on: str,
+    policy_metadata: dict,
+) -> Route:
+    """Blind execution loop — shared by NNA-Dijkstra-Blind and NNA-AStar-Blind.
+
+    Identical planning to :func:`run_nna_with_fair_replan` (hazard- and
+    block-blind on ``view.base_graph``), but **no replan on blocked-edge
+    encounter**. The policy commits to its plan and fails with
+    ``failure_reason = "blocked"`` the first time the planned next edge is
+    in ``scenario.blocked_set()``.
+
+    Mirrors the "fast but blind" baseline — the classical NNA with zero
+    knowledge of blockages at any stage. Expected to underperform the
+    replan-capable NNA and DQN at all RI levels; the gap widens with RI.
+    """
+    t0 = time.perf_counter()
+    base_graph = view.base_graph
+    blocked = scenario.blocked_set()
+
+    current = scenario.start_node
+    remaining = list(scenario.delivery_nodes)
+    visit_order: list[str] = []
+    edge_sequence: list[list[str]] = []
+    per_edge: list[dict] = []
+    step_idx = 0
+
+    while remaining:
+        best_target: Optional[str] = None
+        best_plan: Optional[list[str]] = None
+        best_cost = float("inf")
+        for target in remaining:
+            path, cost = path_fn(base_graph, current, target, plan_on)
+            if path is not None and cost < best_cost:
+                best_cost = cost
+                best_target = target
+                best_plan = path
+
+        if best_target is None or best_plan is None:
+            wall_ms = (time.perf_counter() - t0) * 1000.0
+            return Route(
+                scenario_id=scenario.scenario_id,
+                algorithm_id=algorithm_id,
+                algorithm_config_hash=algorithm_config_hash,
+                visit_order=visit_order,
+                edge_sequence=edge_sequence,
+                per_edge=per_edge,
+                success=False,
+                failure_reason="no_route",
+                replan_count=0,
+                wall_time_ms=wall_ms,
+                policy_metadata=dict(policy_metadata),
+            )
+
+        cursor = current
+        for nxt in best_plan[1:]:
+            if (cursor, nxt) in blocked:
+                wall_ms = (time.perf_counter() - t0) * 1000.0
+                return Route(
+                    scenario_id=scenario.scenario_id,
+                    algorithm_id=algorithm_id,
+                    algorithm_config_hash=algorithm_config_hash,
+                    visit_order=visit_order,
+                    edge_sequence=edge_sequence,
+                    per_edge=per_edge,
+                    success=False,
+                    failure_reason="blocked",
+                    replan_count=0,
+                    wall_time_ms=wall_ms,
+                    policy_metadata=dict(policy_metadata),
+                )
+            step_record = _edge_step_record(
+                cursor, nxt, step_idx, False, base_graph, scenario
+            )
+            per_edge.append(step_record.to_dict())
+            edge_sequence.append([cursor, nxt])
+            step_idx += 1
+            cursor = nxt
+            if step_idx > scenario.max_steps:
+                wall_ms = (time.perf_counter() - t0) * 1000.0
+                return Route(
+                    scenario_id=scenario.scenario_id,
+                    algorithm_id=algorithm_id,
+                    algorithm_config_hash=algorithm_config_hash,
+                    visit_order=visit_order,
+                    edge_sequence=edge_sequence,
+                    per_edge=per_edge,
+                    success=False,
+                    failure_reason="timeout",
+                    replan_count=0,
+                    wall_time_ms=wall_ms,
+                    policy_metadata=dict(policy_metadata),
+                )
+
+        visit_order.append(best_target)
+        remaining.remove(best_target)
+        current = best_target
+
+    wall_ms = (time.perf_counter() - t0) * 1000.0
+    return Route(
+        scenario_id=scenario.scenario_id,
+        algorithm_id=algorithm_id,
+        algorithm_config_hash=algorithm_config_hash,
+        visit_order=visit_order,
+        edge_sequence=edge_sequence,
+        per_edge=per_edge,
+        success=True,
+        failure_reason=None,
+        replan_count=0,
+        wall_time_ms=wall_ms,
+        policy_metadata=dict(policy_metadata),
+    )
