@@ -5,12 +5,14 @@ Preprocessing + baseline benchmarking for the BSCS thesis
 (Janiola, Paulmino, Lluch).
 
 This sub-project turns raw data into a hazard-enriched road network graph
-that the sibling `RL_framework/` project consumes. It also owns the
-**fair-evaluation harness** (`src/evaluation/`, see its README) that
-benchmarks the DQN against classical NNA baselines on a shared, committed
-cohort of scenarios. The older, fairness-unsafe
-`src/benchmarks/monte_carlo.py` is retained for reproducibility only and
-has been marked deprecated.
+that the sibling repos consume. As of 2026-05-11, the **fair-evaluation
+harness** that used to live at `src/evaluation/` has been vendored into
+`web/Hazard-Aware-Routing-REST-API/src/evaluation/` — that repo is now
+the canonical source-of-truth for benchmarking and live inference. This
+sub-project's scope is now narrower: produce the GraphML hazard graph
+that the API consumes. The older, fairness-unsafe
+`src/benchmarks/monte_carlo.py` is retained for pre-2026-04-18
+reproducibility only and is marked deprecated.
 
 ## What goes in
 
@@ -56,27 +58,13 @@ python -m src.data.visualize_hazards
 
 # Legacy baseline (DEPRECATED — kept for pre-2026-04-18 reproducibility only):
 python -m src.benchmarks.monte_carlo --episodes 300 --deliveries 5
-
-# Fair-evaluation harness (thesis-reportable path):
-# Stage 1 — generate a committed cohort of scenarios
-python -m src.evaluation.scenario_generator \
-    --graph data/staged_subgraphs/selected_subgraph_n200.graphml \
-    --graph-id la_trinidad_subgraph_n200 \
-    --config src/evaluation/configs/hazard_training_final/balanced_HF/stage_200_balanced_HF_RI3_det.json \
-    --cohort-id la_trinidad_mini \
-    --num-scenarios 100 --num-deliveries 5 --master-seed 42
-
-# Stage 2 — run policies against that cohort
-python -m src.evaluation.run_policies \
-    --cohort-dir src/evaluation/cohorts/la_trinidad_mini \
-    --algorithms NNA-Dijkstra
-
-# Stage 3 — aggregate metrics
-python -m src.evaluation.evaluator --cohort-dir src/evaluation/cohorts/la_trinidad_mini
 ```
 
-See `src/evaluation/README.md` for the full contract (schemas, algorithm
-notes, fairness argument, extension patterns).
+For benchmarking, live inference, and the fair-evaluation harness, see
+the API repo at `web/Hazard-Aware-Routing-REST-API/`. As of 2026-05-11
+the entire `src/evaluation/` tree was vendored there; this sub-project
+no longer owns benchmarking. See `Thesis/HANDOFF_2026-05-11.md` for the
+post-vendor architecture summary.
 
 ## Hazard score mapping (v3, canonical-3, NOAH-aligned)
 
