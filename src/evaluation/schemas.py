@@ -1,13 +1,12 @@
-"""Dataclasses for cohort / scenario / route plus JSONL I/O helpers.
+"""Dataclasses for benchmark / scenario / route plus JSONL I/O helpers.
 
-The evaluation harness persists all state as newline-delimited JSON so that
-(a) each stage can stream input without loading the whole file, (b) adding a
-new scenario or route never rewrites existing ones, and (c) artifacts are
-peer-reviewable text.
+The harness persists state as newline-delimited JSON so each stage can
+stream input without loading the whole file, adding a new scenario or
+route never rewrites existing ones, and artifacts are peer-reviewable
+text.
 
-Edge identifiers in JSON are encoded ``"u|v"`` because JSON object keys must
-be strings. The pipe character never appears in OSM node ids (they are
-stringified integers).
+Edge identifiers are encoded ``"u|v"`` because JSON object keys must be
+strings. The pipe character never appears in OSM node ids.
 """
 
 from __future__ import annotations
@@ -20,6 +19,8 @@ from typing import Any, Iterator, Optional
 
 EDGE_SEP = "|"
 
+BENCHMARK_SCHEMA_VERSION = 2
+
 
 def edge_key(u: str, v: str) -> str:
     return f"{u}{EDGE_SEP}{v}"
@@ -31,22 +32,33 @@ def parse_edge_key(k: str) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Cohort metadata
+# Benchmark metadata (schema v2)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class Cohort:
-    cohort_id: str
+class Benchmark:
+    """Top-level manifest for a generated benchmark.
+
+    Persisted as ``benchmark.json`` at the root of a benchmark directory
+    alongside ``scenarios.jsonl``, ``runs/<algorithm>.jsonl`` and
+    ``report/metrics.json``.
+    """
+
+    benchmark_id: str
+    schema_version: int
     generated_at: str
     master_seed: int
     graph_id: str
     graph_path: str
-    num_scenarios: int
-    sampling_policy: str
+    n_scenarios: int
+    n_evaluations: int
+    k_deliveries: int
+    rain_intensities: list[str]
+    activation_strategy: str
+    sampler: str
+    longitudinal: bool
     ri_distribution: dict[str, int]
-    num_deliveries: int
-    activation_mode: str
     feasibility_filtered: bool
     scenarios_path: str = "scenarios.jsonl"
 
@@ -187,34 +199,39 @@ def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
             yield json.loads(line)
 
 
-def read_cohort(cohort_dir: Path) -> Cohort:
-    with (cohort_dir / "cohort.json").open("r", encoding="utf-8") as f:
+def read_benchmark(benchmark_dir: Path) -> Benchmark:
+    bm_path = benchmark_dir / "benchmark.json"
+    with bm_path.open("r", encoding="utf-8") as f:
         d = json.load(f)
-    return Cohort(
-        cohort_id=d["cohort_id"],
+    return Benchmark(
+        benchmark_id=d["benchmark_id"],
+        schema_version=int(d.get("schema_version", BENCHMARK_SCHEMA_VERSION)),
         generated_at=d["generated_at"],
         master_seed=int(d["master_seed"]),
         graph_id=d["graph_id"],
         graph_path=d["graph_path"],
-        num_scenarios=int(d["num_scenarios"]),
-        sampling_policy=d["sampling_policy"],
+        n_scenarios=int(d["n_scenarios"]),
+        n_evaluations=int(d["n_evaluations"]),
+        k_deliveries=int(d["k_deliveries"]),
+        rain_intensities=list(d["rain_intensities"]),
+        activation_strategy=d["activation_strategy"],
+        sampler=d["sampler"],
+        longitudinal=bool(d["longitudinal"]),
         ri_distribution={k: int(v) for k, v in d["ri_distribution"].items()},
-        num_deliveries=int(d["num_deliveries"]),
-        activation_mode=d["activation_mode"],
         feasibility_filtered=bool(d["feasibility_filtered"]),
         scenarios_path=d.get("scenarios_path", "scenarios.jsonl"),
     )
 
 
-def write_cohort(cohort_dir: Path, cohort: Cohort) -> None:
-    cohort_dir.mkdir(parents=True, exist_ok=True)
-    with (cohort_dir / "cohort.json").open("w", encoding="utf-8") as f:
-        json.dump(cohort.to_dict(), f, indent=2, sort_keys=True)
+def write_benchmark(benchmark_dir: Path, benchmark: Benchmark) -> None:
+    benchmark_dir.mkdir(parents=True, exist_ok=True)
+    with (benchmark_dir / "benchmark.json").open("w", encoding="utf-8") as f:
+        json.dump(benchmark.to_dict(), f, indent=2, sort_keys=True)
 
 
-def read_scenarios(cohort_dir: Path) -> Iterator[Scenario]:
-    cohort = read_cohort(cohort_dir)
-    for rec in read_jsonl(cohort_dir / cohort.scenarios_path):
+def read_scenarios(benchmark_dir: Path) -> Iterator[Scenario]:
+    benchmark = read_benchmark(benchmark_dir)
+    for rec in read_jsonl(benchmark_dir / benchmark.scenarios_path):
         yield Scenario.from_dict(rec)
 
 

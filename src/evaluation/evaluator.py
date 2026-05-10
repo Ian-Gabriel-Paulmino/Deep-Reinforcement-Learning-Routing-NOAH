@@ -1,12 +1,13 @@
-"""Stage 3: aggregate metrics from saved routes and emit a report.
+"""Stage 3: aggregate metrics from saved runs and emit a report.
 
-Reads ``cohort.json`` + every ``routes/*.jsonl`` in the cohort dir, runs each
-metric in ``metrics.REGISTRY`` over every ``(scenario, route)`` pair, and
-aggregates by ``(algorithm_id, rain_level)``. Writes ``report/metrics.json``.
+Reads ``benchmark.json`` + every ``runs/*.jsonl`` in the benchmark dir,
+runs each metric in ``metrics.REGISTRY`` over every ``(scenario, route)``
+pair, and aggregates by ``(algorithm_id, rain_level)``. Writes
+``report/metrics.json``.
 
 Usage (run from the Benguet project root):
     python -m src.evaluation.evaluator \\
-        --cohort-dir src/evaluation/cohorts/la_trinidad_mini
+        --benchmark-dir src/evaluation/benchmarks/la_trinidad_mini
 """
 
 from __future__ import annotations
@@ -24,14 +25,14 @@ from typing import Any, Optional
 
 from .metrics import REGISTRY
 from .metrics.robustness import compute_robustness_ratio
-from .schemas import Route, Scenario, read_cohort, read_jsonl, read_scenarios
+from .schemas import Route, Scenario, read_benchmark, read_jsonl, read_scenarios
 
 
 logger = logging.getLogger("evaluation.evaluator")
 
 
-def _scenarios_by_id(cohort_dir: Path) -> dict[str, Scenario]:
-    return {s.scenario_id: s for s in read_scenarios(cohort_dir)}
+def _scenarios_by_id(benchmark_dir: Path) -> dict[str, Scenario]:
+    return {s.scenario_id: s for s in read_scenarios(benchmark_dir)}
 
 
 def _safe_stats(values: list[float]) -> dict[str, float]:
@@ -177,29 +178,33 @@ def _write_overall_csv(path: Path, report: dict) -> None:
     logger.info(f"Wrote {path} ({len(rows)} rows)")
 
 
-def evaluate(cohort_dir: Path, out_dir: Optional[Path] = None) -> dict:
-    cohort = read_cohort(cohort_dir)
-    scenarios = _scenarios_by_id(cohort_dir)
+def evaluate(benchmark_dir: Path, out_dir: Optional[Path] = None) -> dict:
+    benchmark = read_benchmark(benchmark_dir)
+    scenarios = _scenarios_by_id(benchmark_dir)
 
-    out_dir = out_dir or (cohort_dir / "report")
+    out_dir = out_dir or (benchmark_dir / "report")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    route_dir = cohort_dir / "routes"
-    if not route_dir.exists():
-        raise FileNotFoundError(f"No routes/ directory at {route_dir}")
+    runs_dir = benchmark_dir / "runs"
+    if not runs_dir.exists():
+        raise FileNotFoundError(f"No runs/ directory at {runs_dir}")
 
     report: dict = {
-        "cohort_id": cohort.cohort_id,
-        "num_scenarios": cohort.num_scenarios,
-        "graph_id": cohort.graph_id,
-        "activation_mode": cohort.activation_mode,
+        "benchmark_id": benchmark.benchmark_id,
+        "schema_version": benchmark.schema_version,
+        "n_evaluations": benchmark.n_evaluations,
+        "n_scenarios": benchmark.n_scenarios,
+        "graph_id": benchmark.graph_id,
+        "activation_strategy": benchmark.activation_strategy,
+        "sampler": benchmark.sampler,
+        "longitudinal": benchmark.longitudinal,
         "algorithms": {},
     }
 
     raw_rows: list[dict[str, Any]] = []
 
-    for routes_file in sorted(route_dir.glob("*.jsonl")):
-        algorithm_id = routes_file.stem
+    for runs_file in sorted(runs_dir.glob("*.jsonl")):
+        algorithm_id = runs_file.stem
         logger.info(f"Scoring {algorithm_id}")
 
         # {metric_name: {ri_key: [values]}}  plus an "all" bucket
@@ -212,7 +217,7 @@ def evaluate(cohort_dir: Path, out_dir: Optional[Path] = None) -> dict:
         wall_times: list[float] = []
         scored = 0
 
-        for rec in read_jsonl(routes_file):
+        for rec in read_jsonl(runs_file):
             route = Route.from_dict(rec)
             scenario = scenarios.get(route.scenario_id)
             if scenario is None:
@@ -249,7 +254,7 @@ def evaluate(cohort_dir: Path, out_dir: Optional[Path] = None) -> dict:
             }
 
         report["algorithms"][algorithm_id] = {
-            "routes_file": str(routes_file.relative_to(cohort_dir)),
+            "runs_file": str(runs_file.relative_to(benchmark_dir)),
             "routes_scored": scored,
             "failure_counts": dict(failure_counts),
             "replan_count_stats": _safe_stats([float(r) for r in replan_counts]),
@@ -274,9 +279,13 @@ def evaluate(cohort_dir: Path, out_dir: Optional[Path] = None) -> dict:
 def _print_summary(report: dict) -> None:
     print()
     print("=" * 72)
-    print(f"Cohort: {report['cohort_id']}  ({report['num_scenarios']} scenarios)")
-    print(f"Graph:  {report['graph_id']}")
-    print(f"Mode:   {report['activation_mode']}")
+    print(
+        f"Benchmark: {report['benchmark_id']}  "
+        f"({report.get('n_evaluations', report.get('n_scenarios', 0))} scenarios)"
+    )
+    print(f"Graph:     {report['graph_id']}")
+    print(f"Strategy:  {report['activation_strategy']}")
+    print(f"Sampler:   {report.get('sampler', 'scc_restricted')}")
     print("=" * 72)
     for algo_id, info in report["algorithms"].items():
         print(f"\n  {algo_id}  (scored {info['routes_scored']})")
@@ -332,8 +341,8 @@ def _print_summary(report: dict) -> None:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    p = argparse.ArgumentParser(description="Stage 3: evaluate routes and emit report.")
-    p.add_argument("--cohort-dir", required=True, type=Path)
+    p = argparse.ArgumentParser(description="Stage 3: evaluate runs and emit report.")
+    p.add_argument("--benchmark-dir", required=True, type=Path)
     p.add_argument("--out-dir", type=Path, default=None)
     p.add_argument("--debug", action="store_true")
     args = p.parse_args(argv)
@@ -345,7 +354,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         stream=sys.stdout,
     )
 
-    evaluate(cohort_dir=args.cohort_dir, out_dir=args.out_dir)
+    evaluate(benchmark_dir=args.benchmark_dir, out_dir=args.out_dir)
     return 0
 
 

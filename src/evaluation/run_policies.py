@@ -1,12 +1,12 @@
-"""Stage 2: run policies against a committed cohort.
+"""Stage 2: run policies against a committed benchmark.
 
-Reads ``cohorts/<cohort_id>/scenarios.jsonl``, runs every configured policy,
-and writes one ``routes/<algorithm_id>.jsonl`` per policy. The base graph is
-loaded once and reused across scenarios.
+Reads ``benchmarks/<benchmark_id>/scenarios.jsonl``, runs every configured
+policy, and writes one ``runs/<algorithm_id>.jsonl`` per policy. The base
+graph is loaded once and reused across scenarios.
 
 Usage (run from the Benguet project root):
     python -m src.evaluation.run_policies \\
-        --cohort-dir src/evaluation/cohorts/la_trinidad_mini \\
+        --benchmark-dir src/evaluation/benchmarks/la_trinidad_mini \\
         --algorithms NNA-Dijkstra
 """
 
@@ -27,7 +27,7 @@ from .runners.nna_blind import NNADijkstraBlind
 from .runners.nna_ha import NNADijkstraHA
 from .runners.nna_ha_blind import NNADijkstraHABlind
 from .scenario_generator import load_graph
-from .schemas import read_cohort, read_scenarios, write_jsonl
+from .schemas import read_benchmark, read_scenarios, write_jsonl
 
 
 logger = logging.getLogger("evaluation.run_policies")
@@ -70,20 +70,22 @@ POLICY_FACTORIES = {
 
 
 def run_policies(
-    cohort_dir: Path,
+    benchmark_dir: Path,
     algorithm_ids: list[str],
     out_dir: Optional[Path] = None,
 ) -> None:
-    cohort = read_cohort(cohort_dir)
-    out_dir = out_dir or (cohort_dir / "routes")
+    benchmark = read_benchmark(benchmark_dir)
+    out_dir = out_dir or (benchmark_dir / "runs")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Cohort: {cohort.cohort_id}  ({cohort.num_scenarios} scenarios)")
-    logger.info(f"Graph:  {cohort.graph_path}")
+    logger.info(
+        f"Benchmark: {benchmark.benchmark_id}  ({benchmark.n_evaluations} scenarios)"
+    )
+    logger.info(f"Graph:     {benchmark.graph_path}")
 
-    base_graph = load_graph(Path(cohort.graph_path))
+    base_graph = load_graph(Path(benchmark.graph_path))
 
-    scenarios = list(read_scenarios(cohort_dir))
+    scenarios = list(read_scenarios(benchmark_dir))
 
     for algorithm_id in algorithm_ids:
         if algorithm_id not in POLICY_FACTORIES:
@@ -113,8 +115,8 @@ def run_policies(
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    p = argparse.ArgumentParser(description="Stage 2: run policies against a cohort.")
-    p.add_argument("--cohort-dir", required=True, type=Path)
+    p = argparse.ArgumentParser(description="Stage 2: run policies against a benchmark.")
+    p.add_argument("--benchmark-dir", required=True, type=Path)
     p.add_argument(
         "--algorithms",
         nargs="+",
@@ -133,7 +135,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
 
     run_policies(
-        cohort_dir=args.cohort_dir,
+        benchmark_dir=args.benchmark_dir,
         algorithm_ids=args.algorithms,
         out_dir=args.out_dir,
     )
