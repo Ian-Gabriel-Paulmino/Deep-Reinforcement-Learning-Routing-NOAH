@@ -12,3 +12,12 @@ cache
 archive
 episode_maps
 docs
+
+# Harness runtime artifacts and drafts
+data/jobs/
+manuscript_slice.md
+
+# Transient harness benchmark outputs (test_*, verify_*) — only canonical
+# la_trinidad_* fixtures are versioned under src/evaluation/benchmarks/.
+src/evaluation/benchmarks/test_*/
+src/evaluation/benchmarks/verify_*/
