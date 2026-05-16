@@ -1,18 +1,18 @@
 # Benguet Flood and Landslide Data
 
-Preprocessing + baseline benchmarking for the BSCS thesis
+Preprocessing for the BSCS thesis
 **Hazard-Aware DRL Routing for La Trinidad, Benguet**
 (Janiola, Paulmino, Lluch).
 
 This sub-project turns raw data into a hazard-enriched road network graph
-that the sibling repos consume. As of 2026-05-11, the **fair-evaluation
-harness** that used to live at `src/evaluation/` has been vendored into
-`web/Hazard-Aware-Routing-REST-API/src/evaluation/` — that repo is now
-the canonical source-of-truth for benchmarking and live inference. This
-sub-project's scope is now narrower: produce the GraphML hazard graph
-that the API consumes. The older, fairness-unsafe
-`src/benchmarks/monte_carlo.py` is retained for pre-2026-04-18
-reproducibility only and is marked deprecated.
+that the sibling repos consume. Its scope is **preprocessing only**:
+produce the GraphML hazard graph that the REST API consumes. As of
+2026-05-11 the fair-evaluation harness was vendored out to
+`web/Hazard-Aware-Routing-REST-API/`, and as of 2026-05-16 the leftover
+`src/benchmarks/monte_carlo.py` + `src/benchmarks/viz_algos.py` baseline
+scripts (deprecated since 2026-04-18) and their migration helpers in
+`scripts/_archive/` have been removed. For benchmarking, live inference,
+and the fair-evaluation harness, see the API repo.
 
 ## What goes in
 
@@ -43,7 +43,7 @@ reproducibility only and is marked deprecated.
 ## Quick start
 
 ```bash
-# From this directory, install dependencies (uv; Python 3.10+)
+# From this directory, install dependencies (uv; Python 3.13+ per pyproject.toml)
 uv sync
 
 # Regenerate the hazard graph (~10 min; dominated by the overlay step)
@@ -55,16 +55,7 @@ python -m src.data.prepare_data --cache-osm
 # Render the Folium map (~30 s)
 python -m src.data.visualize_hazards
 # open data/la_trinidad_hazard_map_v3.html in a browser
-
-# Legacy baseline (DEPRECATED — kept for pre-2026-04-18 reproducibility only):
-python -m src.benchmarks.monte_carlo --episodes 300 --deliveries 5
 ```
-
-For benchmarking, live inference, and the fair-evaluation harness, see
-the API repo at `web/Hazard-Aware-Routing-REST-API/`. As of 2026-05-11
-the entire `src/evaluation/` tree was vendored there; this sub-project
-no longer owns benchmarking. See `Thesis/HANDOFF_2026-05-11.md` for the
-post-vendor architecture summary.
 
 ## Hazard score mapping (v3, canonical-3, NOAH-aligned)
 
@@ -79,25 +70,19 @@ Per-edge score is the maximum across 10m samples along the road geometry
 
 ## Where to read next
 
-- **`../PIPELINE_V3_GUIDE.md`** (workspace root) — team-oriented walk-through
-  of the pipeline, conflicts, and open decisions. Start here if you've been
-  away from the project for a while.
-- **`../CHANGES_V3_2026-04-17.md`** — one-page summary of what moved where in
-  the v3 refactor.
-- **`../HAZARD_VALUES_DIRECTION_2026-04-17.md`** — the investigation report
-  that motivated v3 (NOAH 3-class confirmation, mapping comparison, DQN
-  impact analysis).
-- **`CLAUDE.md`** — project overview for Claude Code agents.
-- **`docs/findings.md`** — authoritative pipeline reference (keep in step with
-  the manifest).
-- **`docs/modelling.md`** — detailed trace from NOAH rasters to edge scores
-  to travel-time modelling.
-- **`archive/README.md`** — why v1 and v2 are archived and what each folder
-  contains.
+- **`../CLAUDE.md`** (workspace root) — monorepo overview: sub-project map,
+  canonical vs deprecated boundaries, locked thesis direction.
+- **`../MACRO_DDQN_IMPLEMENTATION_2026-05-14.md`** — end-to-end reference
+  for the macro-level DDQN system that consumes this folder's graph.
+- **`../HANDOFF_2026-05-14_visualization.md`** — sequenced upgrade plan
+  for the REST API + visualisation tool.
+- **`../final_thesis_masterguide.md`** — locked manuscript stance.
+- **`archive/README.md`** — why v1 and v2 outputs are archived (gitignored
+  but present on disk for historical reference).
 
 ## Technology
 
-- Python 3.10+ with `uv` for package management.
+- Python 3.13+ with `uv` for package management (per `pyproject.toml`).
 - OSMnx + NetworkX for road network extraction and graph manipulation.
 - GeoPandas + Shapely (STRtree spatial index) for NOAH polygon overlay.
 - Folium for interactive visualization.
